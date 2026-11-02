@@ -45,6 +45,36 @@ li.checked::marker { content: &quot;\2612&quot;; }
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; is a trademark of Nintendo. Eden is not affiliated with Nintendo in any way.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
         <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; 是任天堂的注册商标。Eden 与任天堂没有任何关系。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
+    <message>
+        <source>About Eglantine</source>
+        <translation>关于 Eglantine</translation>
+    </message>
+    <message>
+        <source>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;meta charset=&quot;utf-8&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+p, li { white-space: pre-wrap; }
+hr { height: 1px; border-width: 0; }
+li.unchecked::marker { content: &quot;\2610&quot;; }
+li.checked::marker { content: &quot;\2612&quot;; }
+&lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:&apos;Noto Sans&apos;; font-size:9pt; font-weight:400; font-style:normal;&quot;&gt;
+&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:12pt;&quot;&gt;Eglantine is an experimental open-source emulator for the Nintendo Switch 2, based on the Eden emulator. &lt;br /&gt;&lt;br /&gt;This software should not be used to play games you have not legally obtained.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;meta charset=&quot;utf-8&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+p, li { white-space: pre-wrap; }
+hr { height: 1px; border-width: 0; }
+li.unchecked::marker { content: &quot;\2610&quot;; }
+li.checked::marker { content: &quot;\2612&quot;; }
+&lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:&apos;Noto Sans&apos;; font-size:9pt; font-weight:400; font-style:normal;&quot;&gt;
+&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:12pt;&quot;&gt;Eglantine 是一款实验性的开源 Nintendo Switch 2 模拟器，基于 Eden 模拟器开发。&lt;br /&gt;&lt;br /&gt;请不要用本软件运行你未通过合法途径获得的游戏。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+    </message>
+    <message>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; is a trademark of Nintendo. Eglantine is not affiliated with Nintendo in any way.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;“Nintendo Switch”是任天堂的商标。Eglantine 与任天堂没有任何关联。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+    </message>
+    <message>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+    </message>
 </context>
 <context>
     <name>CalibrationConfigurationDialog</name>
@@ -736,22 +766,22 @@ Aggressive mode may impact performance of other applications such as recording s
     <message>
         <location filename="../../src/qt_common/config/shared_translation.cpp" line="198"/>
         <source>GPU Readback Before NCE Invalidation</source>
-        <translation type="unfinished"/>
+        <translation>NCE 失效前回读 GPU 数据</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/config/shared_translation.cpp" line="199"/>
         <source>Flushes GPU buffer data back to guest memory before NCE invalidates the whole guest page, preserving it while the CPU store proceeds.</source>
-        <translation type="unfinished"/>
+        <translation>在 NCE 使整个 Guest 页面失效之前，把 GPU 缓冲区数据写回 Guest 内存，从而在 CPU 的存储操作继续进行时保留这些数据。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/config/shared_translation.cpp" line="202"/>
         <source>Patch Runtime NROs for NCE</source>
-        <translation type="unfinished"/>
+        <translation>为 NCE 修补运行时加载的 NRO</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/config/shared_translation.cpp" line="203"/>
         <source>Applies NCE code patches to runtime-loaded NRO modules.This is required for some games to run correctly.</source>
-        <translation type="unfinished"/>
+        <translation>对运行时加载的 NRO 模块应用 NCE 代码补丁。某些游戏需要此功能才能正常运行。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/config/shared_translation.cpp" line="205"/>
@@ -854,7 +884,11 @@ Immediate is the fastest option, but can introduce some issues.
 Balanced offers better compatibility and may fix issues in some games.
 Accurate further improves compatibility at the cost of some performance.
 Default follows the GPU Mode setting.</source>
-        <translation type="unfinished"/>
+        <translation>控制 GPU 栅栏同步的行为。
+Immediate 是最快的选项，但可能引入一些问题。
+Balanced 提供更好的兼容性，并可能修复某些游戏中的问题。
+Accurate 以一部分性能为代价进一步提高兼容性。
+Default 跟随 GPU 模式的设置。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/config/shared_translation.cpp" line="238"/>
@@ -2158,6 +2192,50 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
         <source>Grid View</source>
         <translation>网格视图</translation>
     </message>
+    <message>
+        <source>Enable Frame Generation</source>
+        <translation>启用帧生成</translation>
+    </message>
+    <message>
+        <source>Frame Generation Type</source>
+        <translation>帧生成类型</translation>
+    </message>
+    <message>
+        <source>Frame Generation Multiplier</source>
+        <translation>帧生成倍率</translation>
+    </message>
+    <message>
+        <source>Target Frame Rate</source>
+        <translation>目标帧率</translation>
+    </message>
+    <message>
+        <source>Auto Flow Scale</source>
+        <translation>自动光流缩放</translation>
+    </message>
+    <message>
+        <source>Flow Scale</source>
+        <translation>光流缩放</translation>
+    </message>
+    <message>
+        <source>Queue Target</source>
+        <translation>队列目标</translation>
+    </message>
+    <message>
+        <source>Dump Optical Flow</source>
+        <translation>导出光流</translation>
+    </message>
+    <message>
+        <source>Lossless Scaling (LSFG)</source>
+        <translation>无损缩放 (LSFG)</translation>
+    </message>
+    <message>
+        <source>AMD FidelityFX Super Resolution 3 (FSR 3)</source>
+        <translation>AMD FidelityFX 超级分辨率 3 (FSR 3)</translation>
+    </message>
+    <message>
+        <source>AMD FidelityFX Super Resolution 3</source>
+        <translation>AMD FidelityFX 超级分辨率 3</translation>
+    </message>
 </context>
 <context>
     <name>ConfigureApplets</name>
@@ -2808,6 +2886,10 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
         <source>**This will be reset automatically when Eden closes.</source>
         <translation>**这会在 Eden 关闭时自动重置。</translation>
     </message>
+    <message>
+        <source>**This will be reset automatically when Eglantine closes.</source>
+        <translation>**Eglantine 关闭时会自动重置此项。</translation>
+    </message>
 </context>
 <context>
     <name>ConfigureDebugController</name>
@@ -2943,6 +3025,10 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
         <location filename="../../src/yuzu/configuration/configure_dialog.cpp" line="84"/>
         <source>Web</source>
         <translation>网络</translation>
+    </message>
+    <message>
+        <source>Eglantine Configuration</source>
+        <translation>Eglantine 配置</translation>
     </message>
 </context>
 <context>
@@ -3224,6 +3310,10 @@ Would you like to delete the old save data?</source>
         <location filename="../../src/yuzu/configuration/configure_general.cpp" line="154"/>
         <source>This directory is already in the list.</source>
         <translation>这个目录已经在列表中了。</translation>
+    </message>
+    <message>
+        <source>Eglantine</source>
+        <translation>Eglantine</translation>
     </message>
 </context>
 <context>
@@ -3815,6 +3905,10 @@ Would you like to delete the old save data?</source>
         <location filename="../../src/yuzu/configuration/configure_input_advanced.ui" line="2772"/>
         <source>Disable SDL WGI/XInput (Requires restart)</source>
         <translation>禁用 SDL WGI/XInput (需要重启)</translation>
+    </message>
+    <message>
+        <source>Requires restarting Eglantine</source>
+        <translation>需要重启 Eglantine</translation>
     </message>
 </context>
 <context>
@@ -4543,6 +4637,10 @@ To invert the axes, first move your joystick vertically, and then horizontally.<
         <location filename="../../src/yuzu/configuration/configure_motion_touch.cpp" line="281"/>
         <source>UDP Test or calibration configuration is in progress.&lt;br&gt;Please wait for them to finish.</source>
         <translation>UDP 测试或触摸校准正在进行中。&lt;br&gt;请耐心等待。</translation>
+    </message>
+    <message>
+        <source>Eglantine</source>
+        <translation>Eglantine</translation>
     </message>
 </context>
 <context>
@@ -5510,6 +5608,10 @@ Drag points to change position, or double-click table cells to edit values.</sou
         <source>Restore Defaults</source>
         <translation>恢复默认</translation>
     </message>
+    <message>
+        <source>Warning: The settings in this page affect the inner workings of Eglantine&apos;s emulated touchscreen. Changing them may result in undesirable behavior, such as the touchscreen partially or not working. You should only use this page if you know what you are doing.</source>
+        <translation>警告：此页面中的设置会影响 Eglantine 模拟触摸屏的内部机制。更改这些设置可能导致不良后果，例如触摸屏部分失效或完全无法使用。只有在你清楚自己在做什么时，才应使用此页面。</translation>
+    </message>
 </context>
 <context>
     <name>ConfigureUI</name>
@@ -5825,6 +5927,10 @@ Drag points to change position, or double-click table cells to edit values.</sou
         <comment>Tooltip</comment>
         <translation>必须为48个字符，且a-z为小写</translation>
     </message>
+    <message>
+        <source>Eglantine Web Service</source>
+        <translation>Eglantine 网络服务</translation>
+    </message>
 </context>
 <context>
     <name>ControllerDialog</name>
@@ -5941,6 +6047,18 @@ Drag points to change position, or double-click table cells to edit values.</sou
         <location filename="../../src/yuzu/deps_dialog.cpp" line="22"/>
         <source>Version</source>
         <translation>版本</translation>
+    </message>
+    <message>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The projects that make Eglantine possible&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;让 Eglantine 得以实现的各个项目&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+    </message>
+    <message>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine Dependencies&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine 依赖项&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+    </message>
+    <message>
+        <source>Eglantine Dependencies</source>
+        <translation>Eglantine 依赖项</translation>
     </message>
 </context>
 <context>
@@ -6159,6 +6277,10 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
         <location filename="../../src/yuzu/bootmanager.cpp" line="916"/>
         <source>This build doesn&apos;t have OpenGL support.</source>
         <translation>此版本不支持 OpenGL。</translation>
+    </message>
+    <message>
+        <source>Eglantine has not been compiled with OpenGL support.</source>
+        <translation>Eglantine 在编译时未包含 OpenGL 支持。</translation>
     </message>
 </context>
 <context>
@@ -6737,6 +6859,10 @@ Debug Message: </source>
         <location filename="../../src/qt_common/config/uisettings.cpp" line="66"/>
         <source>Toggle Performance Overlay</source>
         <translation>切换性能覆盖层</translation>
+    </message>
+    <message>
+        <source>Exit Eglantine</source>
+        <translation>退出 Eglantine</translation>
     </message>
 </context>
 <context>
@@ -8268,6 +8394,54 @@ Would you like to bypass this and exit anyway?</source>
         <source>Null</source>
         <translation>空</translation>
     </message>
+    <message>
+        <source>&amp;About Eglantine</source>
+        <translation>关于 Eglantine(&amp;A)</translation>
+    </message>
+    <message>
+        <source>&amp;Eglantine Dependencies</source>
+        <translation>Eglantine 依赖项(&amp;E)</translation>
+    </message>
+    <message>
+        <source>Open &amp;Eglantine Folders</source>
+        <translation>打开 Eglantine 文件夹(&amp;E)</translation>
+    </message>
+    <message>
+        <source>Are you sure you want to close Eglantine?</source>
+        <translation>确定要关闭 Eglantine 吗？</translation>
+    </message>
+    <message>
+        <source>Eglantine</source>
+        <translation>Eglantine</translation>
+    </message>
+    <message>
+        <source>The currently running application has requested Eglantine to not exit.
+
+Would you like to bypass this and exit anyway?</source>
+        <translation>当前运行的应用请求 Eglantine 不要退出。
+
+是否要忽略该请求并退出？</translation>
+    </message>
+    <message>
+        <source>Installable Switch File (*.nca *.nsp *.nsz *.xci *.xcz);;Nintendo Content Archive (*.nca);;Nintendo Submission Package (*.nsp *.nsz);;NX Cartridge Image (*.xci *.xcz)</source>
+        <translation>可安装的 Switch 文件 (*.nca *.nsp *.nsz *.xci *.xcz);;Nintendo 内容归档 (*.nca);;Nintendo 提交包 (*.nsp *.nsz);;NX 卡带镜像 (*.xci *.xcz)</translation>
+    </message>
+    <message>
+        <source>Restart Eglantine to apply the X11 backend.</source>
+        <translation>重启 Eglantine 以应用 X11 后端。</translation>
+    </message>
+    <message>
+        <source>FSR 3</source>
+        <translation>FSR 3</translation>
+    </message>
+    <message>
+        <source>LSFG</source>
+        <translation>LSFG</translation>
+    </message>
+    <message>
+        <source>You are using the deconstructed ROM directory format for this game, which is an outdated format that has been superseded by others such as NCA, NAX, XCI, or NSP. Deconstructed ROM directories lack icons, metadata, and update support.&lt;br&gt;For an explanation of the various Switch formats Eglantine supports, out our user handbook. This message will not be shown again.</source>
+        <translation>此游戏使用的是解包的 ROM 目录格式，这种格式已经过时，并已被 NCA、NAX、XCI、NSP 等格式取代。解包的 ROM 目录不支持图标、元数据和更新。&lt;br&gt;关于 Eglantine 支持的各种 Switch 格式，请参阅我们的用户手册。此消息不会再次显示。</translation>
+    </message>
 </context>
 <context>
     <name>MigrationWorker</name>
@@ -8576,6 +8750,10 @@ Proceed anyway?</source>
         <source>Must be between 1 and 32 characters</source>
         <comment>Tooltip</comment>
         <translation>长度需为 1-32 个字符</translation>
+    </message>
+    <message>
+        <source>Eglantine</source>
+        <translation>Eglantine</translation>
     </message>
 </context>
 <context>
@@ -9208,6 +9386,26 @@ p, li { white-space: pre-wrap; }
         <location filename="../../src/qt_common/game_list/game_list_p.h" line="376"/>
         <source>Favorites</source>
         <translation>收藏</translation>
+    </message>
+    <message>
+        <source>%1 (update)</source>
+        <translation>%1（更新）</translation>
+    </message>
+    <message>
+        <source>Citron</source>
+        <translation>Citron</translation>
+    </message>
+    <message>
+        <source>Sudachi</source>
+        <translation>Sudachi</translation>
+    </message>
+    <message>
+        <source>Suyu</source>
+        <translation>Suyu</translation>
+    </message>
+    <message>
+        <source>Yuzu</source>
+        <translation>Yuzu</translation>
     </message>
 </context>
 <context>
@@ -10614,6 +10812,18 @@ By selecting &quot;From Eden&quot;, previous save data stored in Ryujinx will be
         <location filename="../../src/yuzu/ryujinx_dialog.cpp" line="38"/>
         <source>OS returned error: %1</source>
         <translation>OS 返回错误: %1</translation>
+    </message>
+    <message>
+        <source>From Eglantine</source>
+        <translation>来自 Eglantine</translation>
+    </message>
+    <message>
+        <source>Linking save data to Ryujinx lets both Ryujinx and Eglantine reference the same save files for your games.
+
+By selecting &quot;From Eglantine&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
+        <translation>将存档数据链接到 Ryujinx 后，Ryujinx 与 Eglantine 即可引用同一份游戏存档文件。
+
+选择“来自 Eglantine”会删除 Ryujinx 中先前保存的存档数据；选择“来自 Ryujinx”则相反。</translation>
     </message>
 </context>
 <context>

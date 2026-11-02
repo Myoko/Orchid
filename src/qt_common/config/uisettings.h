@@ -170,7 +170,11 @@ struct Values {
     bool game_dir_deprecated_deepscan;
     QVector<GameDir> game_dirs;
     QStringList recent_files;
-    Setting<std::string> language{linkage, {}, "language", Category::Paths};
+    // Default to Simplified Chinese: this fork ships a completed zh_CN
+    // translation and its users want a Chinese UI out of the box. An empty
+    // value means "follow the system locale"; "<System>" in the UI still
+    // overrides this per user.
+    Setting<std::string> language{linkage, "zh_CN", "language", Category::Paths};
 
     std::string theme;
 
