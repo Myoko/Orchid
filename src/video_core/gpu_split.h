@@ -104,6 +104,13 @@ public:
     /// Waits until the back executed everything sent so far.
     void Drain();
 
+    /// Compute or copy work was just sent: what can write GPU-written command lists.
+    void NoteWriter() {
+        last_writer_position = write_position;
+    }
+    /// Waits until the back executed the compute and copy work sent so far (not what came after).
+    void WaitForWriters();
+
 private:
     enum class Kind : u64 {
         Wrap,   ///< The rest of the ring is unused: continue at its start
@@ -158,8 +165,11 @@ private:
     bool front_macros{};
     std::unique_ptr<u64[]> ring;
 
-    // Front side.
-    u64 write_position{};
+    // Front side. Its own cache line: the front writes write_position for every entry, and the
+    // back reads system and ring (above) for every entry; on one line, each write sent the line
+    // to the other core and back.
+    alignas(64) u64 write_position{};
+    u64 last_writer_position{};
     u64 published_local{};
     u64 consumed_cache{};
     /// Words between publishes: small right after a drain, while the back has nothing to do.
@@ -167,13 +177,15 @@ private:
     Tegra::Engines::EngineInterface* front_engine{};
 
     // Back side.
-    Tegra::Engines::EngineInterface* back_engine{};
+    alignas(64) Tegra::Engines::EngineInterface* back_engine{};
 
     static GpuSplit instance;
     static inline thread_local bool back_thread_context{};
 
     alignas(64) std::atomic<u64> published{};
     alignas(64) std::atomic<u64> consumed{};
+    /// A position the front waits for (WaitForWriters): the back stores `consumed` once past it.
+    alignas(64) std::atomic<u64> wait_target{~u64{0}};
     alignas(64) std::atomic<bool> back_waiting{};
     std::atomic<u32> wake{};
     std::jthread back_thread;

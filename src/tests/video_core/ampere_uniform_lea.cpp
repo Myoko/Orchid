@@ -89,7 +89,7 @@ TEST_CASE("Ampere effective addresses accept a uniform addend", "[video_core][am
                      (u64{reg} << 20) | (u64{shift} << 39)));
         }
     }
-    for (const u32 source : {28U, 255U, 0x104U}) {
+    for (const u32 source : {255U, 0x104U}) { // UR28-UR62 map to R180-R214
         const std::array<Instruction, 2> code{{
             {{0x04067c11, source, 0x0f8e30ff, 0x020fc800}},
             {{0x0000794d, 0, 0x03800000, 0}},

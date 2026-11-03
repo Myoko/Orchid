@@ -25,9 +25,12 @@
 #include "video_core/host_shaders/queries_prefix_scan_sum_nosubgroups_comp_spv.h"
 #include "video_core/host_shaders/resolve_conditional_render_comp_spv.h"
 #include "video_core/host_shaders/vulkan_quad_indexed_comp_spv.h"
+#include "video_core/host_shaders/vulkan_quad_indirect_comp_spv.h"
 #include "video_core/host_shaders/vulkan_uint8_comp_spv.h"
+#include "video_core/host_shaders/vulkan_vertex_repack_comp_spv.h"
 #include "video_core/host_shaders/block_linear_unswizzle_3d_bcn_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
+#include "video_core/renderer_vulkan/vertex_repack.h"
 #include "video_core/surface.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -324,6 +327,62 @@ ComputePass::ComputePass(const Device& device_, Scheduler& scheduler, Descriptor
 
 ComputePass::~ComputePass() = default;
 
+VertexRepackPass::VertexRepackPass(const Device& device_, Scheduler& scheduler_,
+                                 DescriptorPool& descriptor_pool, StagingBufferPool& staging_pool_,
+                                 ComputePassDescriptorQueue& descriptor_queue_)
+    : ComputePass(device_, scheduler_, descriptor_pool, INPUT_OUTPUT_DESCRIPTOR_SET_BINDINGS,
+                  INPUT_OUTPUT_DESCRIPTOR_UPDATE_TEMPLATE, INPUT_OUTPUT_BANK_INFO,
+                  COMPUTE_PUSH_CONSTANT_RANGE<12>, VULKAN_VERTEX_REPACK_COMP_SPV),
+      scheduler{scheduler_}, staging_pool{staging_pool_}, descriptor_queue{descriptor_queue_} {}
+
+std::optional<std::pair<VkBuffer, VkDeviceSize>> VertexRepackPass::Assemble(VkBuffer source,
+                                                                           u32 offset, u32 size) {
+    const auto parameters = MakeVertexRepackParameters(
+        offset, size, device.GetStorageBufferAlignment(), device.GetMaxStorageBufferRange(),
+        device.GetMaxComputeWorkGroupCount()[0]);
+    if (!parameters) {
+        LOG_ERROR(Render_Vulkan, "Vertex repack exceeds device limits: offset={}, size={}", offset, size);
+        return std::nullopt;
+    }
+    const u32 num_vertices = parameters->vertices;
+    const u32 output_size = parameters->output_size;
+    const auto dest = staging_pool.Request(output_size, MemoryUsage::DeviceLocal);
+    const u32 base_offset = parameters->source_base;
+    const u32 bias = parameters->source_bias;
+    descriptor_queue.Acquire(scheduler, 2);
+    descriptor_queue.AddBuffer(source, base_offset, parameters->source_range);
+    descriptor_queue.AddBuffer(dest.buffer, dest.offset, output_size);
+    const void* data = descriptor_queue.UpdateData();
+    scheduler.RequestOutsideRenderPassOperationContext();
+    LOG_DEBUG(Render_Vulkan, "Vertex repack queued: source_size={}, output_size={}, groups={}",
+              size, output_size, parameters->dispatch_groups);
+    scheduler.Record([this, data, bias, size, num_vertices,
+                      groups = parameters->dispatch_groups](vk::CommandBuffer cmdbuf) {
+        const VkMemoryBarrier read_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, read_barrier);
+        const auto set = descriptor_allocator.Commit();
+        device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, data);
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
+        cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
+        const std::array<u32, 3> constants{bias, size, num_vertices * 18};
+        cmdbuf.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), constants.data());
+        cmdbuf.Dispatch(groups, 1, 1);
+        const VkMemoryBarrier write_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                              VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, write_barrier);
+    });
+    return std::pair<VkBuffer, VkDeviceSize>{dest.buffer, dest.offset};
+}
+
 Uint8Pass::Uint8Pass(const Device& device_, Scheduler& scheduler_, DescriptorPool& descriptor_pool,
                      StagingBufferPool& staging_buffer_pool_,
                      ComputePassDescriptorQueue& compute_pass_descriptor_queue_)
@@ -423,6 +482,64 @@ std::pair<VkBuffer, VkDeviceSize> QuadIndexedPass::Assemble(
         cmdbuf.Dispatch(Common::DivCeil(num_tri_vertices, DISPATCH_SIZE), 1, 1);
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, WRITE_BARRIER);
+    });
+    return {staging.buffer, staging.offset};
+}
+
+QuadIndirectPass::QuadIndirectPass(const Device& device_, Scheduler& scheduler_,
+                                   DescriptorPool& descriptor_pool_,
+                                   StagingBufferPool& staging_buffer_pool_,
+                                   ComputePassDescriptorQueue& compute_pass_descriptor_queue_)
+    : ComputePass(device_, scheduler_, descriptor_pool_, INPUT_OUTPUT_DESCRIPTOR_SET_BINDINGS,
+                  INPUT_OUTPUT_DESCRIPTOR_UPDATE_TEMPLATE, INPUT_OUTPUT_BANK_INFO,
+                  COMPUTE_PUSH_CONSTANT_RANGE<sizeof(u32) * 2>, VULKAN_QUAD_INDIRECT_COMP_SPV),
+      scheduler{scheduler_}, staging_buffer_pool{staging_buffer_pool_},
+      compute_pass_descriptor_queue{compute_pass_descriptor_queue_} {}
+
+std::pair<VkBuffer, VkDeviceSize> QuadIndirectPass::Convert(VkBuffer src_buffer, u32 src_offset,
+                                                            u32 max_vertices) {
+    // Storage buffer offsets must be aligned; the shader skips the words before the arguments.
+    const u32 alignment = static_cast<u32>(device.GetStorageBufferAlignment());
+    const u32 aligned_offset = src_offset / alignment * alignment;
+    const u32 first_word = (src_offset - aligned_offset) / sizeof(u32);
+    constexpr size_t output_size = 5 * sizeof(u32);
+    const auto staging = staging_buffer_pool.Request(output_size, MemoryUsage::DeviceLocal);
+
+    compute_pass_descriptor_queue.Acquire(scheduler, 2);
+    compute_pass_descriptor_queue.AddBuffer(src_buffer, aligned_offset,
+                                            src_offset - aligned_offset + 4 * sizeof(u32));
+    compute_pass_descriptor_queue.AddBuffer(staging.buffer, staging.offset, output_size);
+    const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
+
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([this, descriptor_data, max_vertices, first_word](vk::CommandBuffer cmdbuf) {
+        static constexpr VkMemoryBarrier READ_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        };
+        static constexpr VkMemoryBarrier WRITE_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+        };
+        const std::array<u32, 2> push_constants{max_vertices, first_word};
+        const VkDescriptorSet set = descriptor_allocator.Commit();
+        device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptor_data);
+        // Waiting for earlier draws too drained the GPU before each of ~20 quad draws a frame.
+        // shortcut: records written by graphics stages (storage writes in draws) are not waited
+        // for; add them back if a title fills its quad draw records from a draw.
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, READ_BARRIER);
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
+        cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
+        cmdbuf.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
+                             &push_constants);
+        cmdbuf.Dispatch(1, 1, 1);
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, WRITE_BARRIER);
     });
     return {staging.buffer, staging.offset};
 }
@@ -743,14 +860,14 @@ void ASTCDecoderPass::AssembleInto(const VideoCommon::ImageInfo& info, u32 skip,
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        vk::PIPELINE_STAGE_GRAPHICS_COMPUTE, 0, image_barrier);
     });
-    // Each decode ends with the GPU thread waiting for the host GPU to go idle. Measured here
-    // (count and time per 5 s); EDEN_NX2_ASTC_FLUSH=1 submits without waiting instead, =0 always
-    // waits. Switch 2 textures only submit by default: Mario Kart World streams them while it
-    // draws, and each wait (20-50 ms) stalled the frame. The decoded image is used after the
-    // barrier above on the same queue either way, as the BCn transcode path does without waiting.
+    // Each decode ends with a submit to the host GPU. Measured here (count and time per 5 s);
+    // EDEN_NX2_ASTC_FLUSH=0 waits for the host GPU to go idle instead, =1 submits for Switch 2
+    // textures too. Switch 2 textures neither wait nor submit by default: a submit per decoded
+    // texture also reset the recorded state for the next draw. The barrier above orders the
+    // decode before any use, as for the BCn transcode (wait = false).
     static const char* const flush_setting = std::getenv("EDEN_NX2_ASTC_FLUSH");
-    const bool flush_only = flush_setting != nullptr ? flush_setting[0] == '1' : info.native_tiling;
-    if (!target.wait) {
+    const bool flush_only = flush_setting == nullptr || flush_setting[0] != '0';
+    if (!target.wait || (flush_setting == nullptr && info.native_tiling)) {
         return;
     }
     const auto start = std::chrono::steady_clock::now();

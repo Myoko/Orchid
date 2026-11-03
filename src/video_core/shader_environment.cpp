@@ -28,7 +28,7 @@
 #include <ranges>
 #include "shader_recompiler/environment.h"
 #include "shader_recompiler/exception.h"
-#include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
+#include "shader_recompiler/frontend/ampere/lower_to_maxwell_upstream.h"
 #include "shader_recompiler/frontend/ampere/program_override.h"
 #include "shader_recompiler/frontend/ampere/program_capture.h"
 #include "shader_recompiler/frontend/ampere/program_address_map.h"
@@ -130,8 +130,9 @@ static void DumpImpl(u64 /*pipeline_hash*/, u64 shader_hash, std::span<const u64
 }
 
 GenericEnvironment::GenericEnvironment(Tegra::MemoryManager& gpu_memory_, GPUVAddr program_base_,
-                                       u32 start_address_)
-    : gpu_memory{&gpu_memory_}, program_base{program_base_} {
+                                       u32 start_address_, bool support_cooperative_matrix_)
+    : gpu_memory{&gpu_memory_}, program_base{program_base_},
+      support_cooperative_matrix{support_cooperative_matrix_} {
     start_address = start_address_;
 }
 
@@ -139,6 +140,10 @@ GenericEnvironment::~GenericEnvironment() = default;
 
 u32 GenericEnvironment::TextureBoundBuffer() const {
     return texture_bound;
+}
+
+u32 GenericEnvironment::SurfaceBoundBuffer() const {
+    return surface_bound != ~0U ? surface_bound : texture_bound;
 }
 
 u32 GenericEnvironment::LocalMemorySize() const {
@@ -245,6 +250,7 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
                sizeof(num_cbuf_replacement_values))
         .write(reinterpret_cast<const char*>(&local_memory_size), sizeof(local_memory_size))
         .write(reinterpret_cast<const char*>(&texture_bound), sizeof(texture_bound))
+        .write(reinterpret_cast<const char*>(&surface_bound), sizeof(surface_bound))
         .write(reinterpret_cast<const char*>(&start_address), sizeof(start_address))
         .write(reinterpret_cast<const char*>(&cached_lowest), sizeof(cached_lowest))
         .write(reinterpret_cast<const char*>(&cached_highest), sizeof(cached_highest))
@@ -316,8 +322,9 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
 Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
                                                              bool via_header_index, u32 raw) {
     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
-    ASSERT(handle.first <= tic_limit);
-    const GPUVAddr descriptor_addr{tic_addr + handle.first * sizeof(Tegra::Texture::TICEntry)};
+    const u32 index{Tegra::Texture::TextureHeaderIndex(handle.first, tic_limit)};
+    ASSERT(index <= tic_limit);
+    const GPUVAddr descriptor_addr{tic_addr + index * sizeof(Tegra::Texture::TICEntry)};
     Tegra::Texture::TICEntry entry;
     gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
     return entry;
@@ -387,6 +394,9 @@ void GenericEnvironment::InitializeNativeCode(std::shared_ptr<const LoweredNativ
         // Native TEX carries its cbuf index explicitly; TEXS obtains it from the environment.
         texture_bound = lowered->texture_bound;
     }
+    if (lowered->surface_bound != ~0U) {
+        surface_bound = lowered->surface_bound;
+    }
     native_source_size = lowered->source_size;
     code = lowered->code;
     cached_lowest = 0;
@@ -432,7 +442,14 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         }
         if (status == Shader::Ampere::ProgramCaptureState::Result::Complete) break;
     }
-    auto lowered = Shader::Ampere::LowerToMaxwell(native, stage == Shader::Stage::Geometry);
+    auto lowered = Shader::Ampere::LowerToMaxwell(native, stage == Shader::Stage::Geometry,
+                                                  support_cooperative_matrix &&
+                                                      stage == Shader::Stage::Compute);
+    // Upstream's lowering covers forms for games without dumps here; it does not know this fork's
+    // geometry-stage rules, so geometry programs stay with ours.
+    if (!lowered && stage != Shader::Stage::Geometry) {
+        if (auto upstream = Shader::Ampere::LowerToMaxwellUpstream(native)) lowered = std::move(upstream);
+    }
     // EDEN_NX2_REJECT=<hex address>,...: treat these programs as rejected (to find which newly
     // lowered program changes a game's behaviour without rebuilding).
     if (static const std::string reject_list = [] {
@@ -542,6 +559,7 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
     }
     auto result = std::make_shared<LoweredNativeCode>();
     result->texture_bound = lowered.required_texture_buffer;
+    result->surface_bound = lowered.required_surface_buffer;
     result->source_size = native_header_size + lowered.source_size;
     auto& lowered_code = result->code;
     lowered_code.resize(sizeof(sph) / sizeof(u64));
@@ -565,11 +583,20 @@ GraphicsEnvironment::GraphicsEnvironment(Tegra::Engines::Maxwell3D& maxwell3d_,
                                          Tegra::MemoryManager& gpu_memory_,
                                          Maxwell::ShaderType program, GPUVAddr program_base_,
                                          u32 start_address_,
-                                         std::shared_ptr<const LoweredNativeCode> lowered_native_)
-    : GenericEnvironment{gpu_memory_, program_base_, start_address_}, maxwell3d{&maxwell3d_} {
+                                         std::shared_ptr<const LoweredNativeCode> lowered_native_,
+                                         bool support_cooperative_matrix_)
+    : GenericEnvironment{gpu_memory_, program_base_, start_address_, support_cooperative_matrix_},
+      maxwell3d{&maxwell3d_} {
     gpu_memory->ReadBlock(program_base + start_address, &sph, sizeof(sph));
     initial_offset = sizeof(sph);
     texture_bound = maxwell3d->regs.bindless_texture_const_buffer_slot;
+    const auto& regs{maxwell3d->regs};
+    const bool native{maxwell3d->GetNativeMacroEngine().native_turing};
+    // Task and mesh programs: the task in the vertex slot, its mesh program in the tessellation
+    // slot (without a task, the mesh program is in the vertex slot).
+    const bool mesh_slot{native && regs.IsMeshEnabled() &&
+                         (program == Maxwell::ShaderType::VertexB ||
+                          program == Maxwell::ShaderType::Tessellation)};
     gp_passthrough_mask = maxwell3d->regs.post_vtg_shader_attrib_skip_mask;
     switch (program) {
     case Maxwell::ShaderType::VertexA:
@@ -600,9 +627,22 @@ GraphicsEnvironment::GraphicsEnvironment(Tegra::Engines::Maxwell3D& maxwell3d_,
         ASSERT_MSG(false, "Invalid program={}", program);
         break;
     }
-    if (maxwell3d->GetNativeMacroEngine().native_turing) {
+    if (mesh_slot) {
+        const bool has_task{regs.IsShaderConfigEnabled(Maxwell::ShaderType::Tessellation)};
+        stage = program == Maxwell::ShaderType::VertexB && has_task ? Shader::Stage::Task
+                                                                    : Shader::Stage::Mesh;
+        mesh_registers = {regs.reg_array[Maxwell::MeshShaderA], regs.reg_array[Maxwell::MeshShaderB],
+                          regs.reg_array[Maxwell::MeshInitShader]};
+        if (stage == Shader::Stage::Mesh && regs.IsShaderConfigEnabled(Maxwell::ShaderType::Geometry)) {
+            const auto& geometry{regs.pipelines[static_cast<size_t>(Maxwell::ShaderType::Geometry)]};
+            const GPUVAddr address{(static_cast<u64>(geometry.reserved[0] & 0xff) << 32) |
+                                   geometry.reserved[1]};
+            gpu_memory->ReadBlock(address, &mesh_primitive_header, sizeof(mesh_primitive_header));
+        }
+    }
+    if (native) {
         if (program != Maxwell::ShaderType::VertexB && program != Maxwell::ShaderType::Geometry &&
-            program != Maxwell::ShaderType::Pixel) {
+            program != Maxwell::ShaderType::Pixel && !mesh_slot) {
             if (std::getenv("EDEN_NX2_SHADER_DUMP")) {
                 InitializeNativeCode(nullptr);
             }
@@ -633,7 +673,6 @@ GraphicsEnvironment::GraphicsEnvironment(Tegra::Engines::Maxwell3D& maxwell3d_,
                 if (gather.Bits(0, 12) == 0xb63 && gather.Bits(79, 2) == 1) {
                     ++gather_probes;
                     const u32 bank = gather.Bits(54, 5);
-                    const auto& regs = maxwell3d->regs;
                     const auto& buffers = maxwell3d->state.shader_stages[4].const_buffers;
                     LOG_WARNING(Shader, "Native gather provenance: program={:#x} stage=4 "
                                 "bound_bank={} encoded_bank={} words={:08x} {:08x} {:08x} {:08x}",
@@ -843,9 +882,11 @@ size_t GraphicsEnvironment::SnapshotSizeBytes() const noexcept {
 ComputeEnvironment::ComputeEnvironment(Tegra::Engines::KeplerCompute& kepler_compute_,
                                        Tegra::MemoryManager& gpu_memory_, GPUVAddr program_base_,
                                        u32 start_address_,
-                                       std::shared_ptr<const LoweredNativeCode> lowered_native_)
-    : GenericEnvironment{gpu_memory_, program_base_, start_address_}, kepler_compute{
-                                                                          &kepler_compute_} {
+                                       std::shared_ptr<const LoweredNativeCode> lowered_native_,
+                                       bool support_cooperative_matrix_)
+    : GenericEnvironment{gpu_memory_, program_base_, start_address_, support_cooperative_matrix_},
+      kepler_compute{
+                                                                      &kepler_compute_} {
     const auto& qmd{kepler_compute->launch_description};
     stage = Shader::Stage::Compute;
     local_memory_size = qmd.local_pos_alloc + qmd.local_crs_alloc;
@@ -915,6 +956,7 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
               sizeof(num_cbuf_replacement_values))
         .read(reinterpret_cast<char*>(&local_memory_size), sizeof(local_memory_size))
         .read(reinterpret_cast<char*>(&texture_bound), sizeof(texture_bound))
+        .read(reinterpret_cast<char*>(&surface_bound), sizeof(surface_bound))
         .read(reinterpret_cast<char*>(&start_address), sizeof(start_address))
         .read(reinterpret_cast<char*>(&read_lowest), sizeof(read_lowest))
         .read(reinterpret_cast<char*>(&read_highest), sizeof(read_highest))
@@ -1026,6 +1068,10 @@ u32 FileEnvironment::SharedMemorySize() const {
 
 u32 FileEnvironment::TextureBoundBuffer() const {
     return texture_bound;
+}
+
+u32 FileEnvironment::SurfaceBoundBuffer() const {
+    return surface_bound != ~0U ? surface_bound : texture_bound;
 }
 
 std::array<u32, 3> FileEnvironment::WorkgroupSize() const {

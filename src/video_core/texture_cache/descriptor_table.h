@@ -30,11 +30,17 @@ public:
     }
 
     void Invalidate() noexcept {
-        std::ranges::fill(read_descriptors, 0);
+        // Cleared on the next read: the texture cache invalidates every channel's tables for
+        // each image it deletes, dozens of times a frame while its collector runs.
+        invalidated = true;
     }
 
     [[nodiscard]] std::pair<T, bool> Read(Tegra::MemoryManager const& gpu_memory, u32 index) noexcept {
         DEBUG_ASSERT(index <= current_limit);
+        if (invalidated) [[unlikely]] {
+            std::ranges::fill(read_descriptors, 0);
+            invalidated = false;
+        }
         const GPUVAddr gpu_addr = current_gpu_addr + index * sizeof(T);
         std::pair<T, bool> result;
         gpu_memory.ReadBlockUnsafe(gpu_addr, std::addressof(result.first), sizeof(T));
@@ -60,14 +66,22 @@ public:
         read_descriptors.resize(Common::DivCeil(num_descriptors, 64U));
         old_size = (std::min)(old_size, read_descriptors.size());
         std::fill(read_descriptors.begin(), read_descriptors.begin() + old_size, 0);
+        invalidated = false;
         //
         descriptors.resize(num_descriptors);
+        ids.resize(num_descriptors);
     }
 
     std::vector<u64> read_descriptors;
     std::vector<T> descriptors;
+    /// What the texture cache made of each descriptor (an image view or sampler id), valid while
+    /// Read reports the descriptor as not new: the texture cache stores it whenever Read returns
+    /// new, and Invalidate/Refresh make every descriptor new again. Saves a hash lookup per
+    /// texture per draw.
+    std::vector<u32> ids;
     GPUVAddr current_gpu_addr{};
     u32 current_limit{};
+    bool invalidated{}; ///< read_descriptors is to be cleared before the next read
 };
 
 } // namespace VideoCommon

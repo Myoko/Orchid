@@ -119,6 +119,12 @@ struct GPU::Impl {
 
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache() {
+        // Runs for every fence. With no CPU write to GPU-cached memory collected since the last
+        // one there is nothing to invalidate: don't move the readback generation either (each
+        // move makes the CPU's remembered readback areas useless).
+        if (!system.HasGPUDirtyMemory()) {
+            return;
+        }
         gpu_thread.BeginAsyncGuestWrite();
         SCOPE_EXIT { gpu_thread.EndAsyncGuestWrite(); };
         std::function<void(PAddr, size_t)> callback_writes([this](PAddr address, size_t size) {
@@ -140,6 +146,7 @@ struct GPU::Impl {
         gpu_thread.InvalidateReadbackCache();
         const u64 fence = ++last_sync_fence;
         sync_requests.emplace_back(std::forward<Func>(action));
+        requested_sync_fence.store(fence, std::memory_order_release);
         return fence;
     }
 
@@ -161,6 +168,11 @@ struct GPU::Impl {
 
     /// Tick pending requests within the GPU.
     void TickWork() {
+        // Runs after every draw: skip the mutex while no request is waiting (requests are rare).
+        if (requested_sync_fence.load(std::memory_order_acquire) ==
+            current_sync_fence.load(std::memory_order_acquire)) {
+            return;
+        }
         std::unique_lock lck{sync_request_mutex};
         while (!sync_requests.empty()) {
             auto request = std::move(sync_requests.front());
@@ -246,7 +258,7 @@ struct GPU::Impl {
             const char* value = std::getenv("EDEN_NX2_UNSAFE_PREEMPTIVE_READS");
             return value != nullptr && std::strcmp(value, "1") == 0;
         }();
-        if (unsafe_preemptive_reads && g_nx2_ampere.load(std::memory_order_relaxed) &&
+        if ((unsafe_preemptive_reads || Settings::values.preemptive_cpu_reads) && g_nx2_ampere.load(std::memory_order_relaxed) &&
             system.GetCurrentHostThreadID() < Core::Hardware::NUM_CPU_CORES) {
             auto area = renderer->ReadRasterizer()->GetFlushArea(addr, size);
             if (area.preemtive) {
@@ -382,6 +394,7 @@ struct GPU::Impl {
     std::list<std::function<void()>> sync_requests;
     std::atomic<u64> current_sync_fence{};
     u64 last_sync_fence{};
+    std::atomic<u64> requested_sync_fence{}; ///< last_sync_fence, readable without the mutex
     std::mutex sync_request_mutex;
     std::condition_variable sync_request_cv;
 

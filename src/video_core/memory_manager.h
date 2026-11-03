@@ -243,6 +243,9 @@ private:
 
     bool native_tiling{};
     mutable std::mutex guard;
+    /// Moves whenever a page kind of any address space changes, and when one is made or
+    /// destroyed (GetMemoryLayoutSize's per-thread answer is only reused while it stays).
+    static inline std::atomic<u64> kind_generation{};
 
     static constexpr size_t continuous_bits = 64;
 

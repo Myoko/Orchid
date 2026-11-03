@@ -55,6 +55,8 @@ MemoryManager::MemoryManager(Core::System& system_, MaxwellDeviceMemoryManager& 
     big_entries.resize(big_page_table_size / 32, 0);
     big_page_continuous.resize(big_page_table_size / continuous_bits, 0);
     entries.resize(page_table_size / 32, 0);
+    // A new address space at the address of a destroyed one must not reuse its kinds.
+    kind_generation.fetch_add(1, std::memory_order_release);
 }
 
 MemoryManager::MemoryManager(Core::System& system_, u64 address_space_bits_, GPUVAddr split_address_, u64 big_page_bits_, u64 page_bits_)
@@ -65,7 +67,9 @@ void MemoryManager::SetNativeSyncpointShim(GPUVAddr address) {
     native_syncpoint_shim.store(address, std::memory_order_release);
 }
 
-MemoryManager::~MemoryManager() = default;
+MemoryManager::~MemoryManager() {
+    kind_generation.fetch_add(1, std::memory_order_release);
+}
 
 MemoryManager::EntryType MemoryManager::GetEntry(size_t position, bool is_big_page) const {
     if (is_big_page) {
@@ -153,7 +157,13 @@ GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr de
         remaining_size -= page_size;
     }
     flush_modified();
-    kind_map.Map(gpu_addr, gpu_addr + size, kind);
+    {
+        // As in BigPageTableOp: service threads map (nx2:gpu jobs) while the GPU thread reads the
+        // kinds (GetPageKind, GetMemoryLayoutSize for every storage buffer binding).
+        std::unique_lock<std::mutex> lock(guard);
+        kind_map.Map(gpu_addr, gpu_addr + size, kind);
+        kind_generation.fetch_add(1, std::memory_order_release);
+    }
     return gpu_addr;
 }
 
@@ -211,6 +221,7 @@ GPUVAddr MemoryManager::BigPageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr
     {
         std::unique_lock<std::mutex> lock(guard);
         kind_map.Map(gpu_addr, gpu_addr + size, kind);
+        kind_generation.fetch_add(1, std::memory_order_release);
     }
     return gpu_addr;
 }
@@ -307,7 +318,7 @@ void MemoryManager::Write(GPUVAddr addr, T data) {
         return;
     }
     // A Switch 2 sparse block nobody wrote yet gets its memory now.
-    Tegra::Nx2BackSparseWrite(addr, sizeof(T));
+    Tegra::Nx2BackSparseWrite(addr, sizeof(T), &data);
     if (auto page_pointer{GetPointer(addr)}; page_pointer) {
         std::memcpy(page_pointer, &data, sizeof(T));
         return;
@@ -436,11 +447,14 @@ void MemoryManager::ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std:
         if (!unsafe) {
             rasterizer->FlushRegion(dev_addr_base, copy_amount, which);
         }
-        if (!IsBigPageContinuous(page_index)) [[unlikely]] {
-            memory.ReadBlockUnsafe(dev_addr_base, dest_buffer, copy_amount);
-        } else {
-            u8* physical = memory.GetPointer<u8>(dev_addr_base);
+        // A continuous big page may still have no host memory (a Switch 2 region backed as it is
+        // written, while its backing is pending): the per-page copy handles that.
+        u8* const physical = IsBigPageContinuous(page_index) ? memory.GetPointer<u8>(dev_addr_base)
+                                                             : nullptr;
+        if (physical != nullptr) [[likely]] {
             std::memcpy(dest_buffer, physical, copy_amount);
+        } else {
+            memory.ReadBlockUnsafe(dev_addr_base, dest_buffer, copy_amount);
         }
         dest_buffer = static_cast<u8*>(dest_buffer) + copy_amount;
     };
@@ -491,7 +505,7 @@ void MemoryManager::ReadWordsUnsafe(GPUVAddr gpu_src_addr, u32* dest, u32 count)
 
 void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size, [[maybe_unused]] VideoCommon::CacheType which, bool unsafe) {
     // Give Switch 2 sparse pages the write lands on their memory first (otherwise it is dropped).
-    Tegra::Nx2BackSparseWrite(gpu_dest_addr, size);
+    Tegra::Nx2BackSparseWrite(gpu_dest_addr, size, src_buffer);
     auto just_advance = [&]([[maybe_unused]] std::size_t page_index, [[maybe_unused]] std::size_t offset, std::size_t copy_amount) {
         src_buffer = static_cast<const u8*>(src_buffer) + copy_amount;
     };
@@ -510,11 +524,12 @@ void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffe
         if (!unsafe) {
             rasterizer->InvalidateRegion(dev_addr_base, copy_amount, which);
         }
-        if (!IsBigPageContinuous(page_index)) [[unlikely]] {
-            memory.WriteBlockUnsafe(dev_addr_base, src_buffer, copy_amount);
-        } else {
-            u8* physical = memory.GetPointer<u8>(dev_addr_base);
+        u8* const physical = IsBigPageContinuous(page_index) ? memory.GetPointer<u8>(dev_addr_base)
+                                                             : nullptr;
+        if (physical != nullptr) [[likely]] {
             std::memcpy(physical, src_buffer, copy_amount);
+        } else {
+            memory.WriteBlockUnsafe(dev_addr_base, src_buffer, copy_amount);
         }
         src_buffer = static_cast<const u8*>(src_buffer) + copy_amount;
     };
@@ -629,8 +644,36 @@ size_t MemoryManager::MaxContinuousRange(GPUVAddr gpu_addr, size_t size) const {
 }
 
 size_t MemoryManager::GetMemoryLayoutSize(GPUVAddr gpu_addr, size_t max_size) const {
+    // Asked for every storage buffer binding and indexed draw: answered from the kind entry this
+    // thread looked up last while no page kind of any address space changed since, instead of
+    // taking the lock and searching the map each time.
+    struct Cached {
+        const MemoryManager* owner;
+        u64 generation;
+        GPUVAddr start;
+        GPUVAddr end;
+        bool null;
+    };
+    thread_local Cached cached{};
+    const u64 generation = kind_generation.load(std::memory_order_acquire);
+    if (cached.owner == this && cached.generation == generation && gpu_addr >= cached.start &&
+        gpu_addr < cached.end) {
+        return cached.null ? 0 : static_cast<size_t>(cached.end - gpu_addr);
+    }
     std::unique_lock<std::mutex> lock(guard);
-    return kind_map.GetContinuousSizeFrom(gpu_addr);
+    const auto key = static_cast<s64>(gpu_addr);
+    if (key < 0) {
+        return 0;
+    }
+    const auto segment = kind_map.GetSegment(key);
+    cached = {
+        .owner = this,
+        .generation = kind_generation.load(std::memory_order_relaxed),
+        .start = static_cast<GPUVAddr>(std::max<s64>(segment.start, 0)),
+        .end = static_cast<GPUVAddr>(segment.end),
+        .null = segment.value == PTEKind::INVALID,
+    };
+    return cached.null ? 0 : static_cast<size_t>(cached.end - gpu_addr);
 }
 
 void MemoryManager::InvalidateRegion(GPUVAddr gpu_addr, size_t size,

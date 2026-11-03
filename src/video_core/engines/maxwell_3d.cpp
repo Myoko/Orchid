@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <fstream>
+#include <span>
+#include <fmt/ranges.h>
 #include <limits>
 #include <optional>
 #include "common/assert.h"
@@ -164,6 +167,8 @@ bool Maxwell3D::IsMethodExecutable(u32 method) {
     case MAXWELL3D_REG_INDEX(vertex_array_instance_first):
     case MAXWELL3D_REG_INDEX(vertex_array_instance_subsequent):
     case MAXWELL3D_REG_INDEX(draw_texture.src_y0):
+    case RootTables::SelectMethod:
+    case RootTables::LoadMethod:
     case MAXWELL3D_REG_INDEX(wait_for_idle):
     case MAXWELL3D_REG_INDEX(shadow_ram_control):
     case MAXWELL3D_REG_INDEX(load_mme.instruction_ptr):
@@ -358,6 +363,17 @@ void Maxwell3D::ProcessMethodCall(u32 method, u32 argument, u32 nonshadow_argume
         LOG_DEBUG(HW_GPU, "Native GPU surface clear: value={:#x}", argument);
     }
     switch (method) {
+    case RootTables::SelectMethod:
+        root_tables.selected = argument & 7;
+        root_tables.offset = (argument >> 8) & 0xff;
+        return;
+    case RootTables::LoadMethod:
+        if (root_tables.offset < 256 && root_tables.offset % 4 == 0) {
+            root_tables.tables[root_tables.selected][root_tables.offset / 4] = argument;
+            root_tables.loaded = true;
+        }
+        root_tables.offset += 4;
+        return;
     case MAXWELL3D_REG_INDEX(wait_for_idle):
         return rasterizer->WaitForIdle();
     case MAXWELL3D_REG_INDEX(shadow_ram_control):
@@ -823,9 +839,41 @@ struct Maxwell3D::FrontState {
     /// then can it have a deferred instanced draw to issue at the end of a macro.
     bool draw_pending{true};
     bool skip_same{}; ///< SkipSameValueWrites() && FrontSkipSame(), read once
+    /// The executing macro's remaining parameters are a GPU-written indirect draw record here.
+    GPUVAddr indirect_parameters{};
+    bool indirect_indexed{};
 };
 
 namespace {
+
+// Hyrule Warriors' instanced draw macro, [topology, vertex count, instances, first vertex, base
+// instance]: the last four can be an NVN DrawArraysIndirect record the GPU wrote, read back
+// with a full GPU wait each (about 30 per combat frame) when the macro runs on them.
+constexpr std::array<u32, 27> DRAW_ARRAYS_INSTANCED_MACRO{
+    0x00000003, 0x1D100000, 0x31C18300, 0x00940003, 0x18C000D7, 0x71C08300, 0x0C74638F,
+    0x18C00143, 0xB1C00300, 0x20C01913, 0x00C00001, 0x301C5F00, 0x2C340D7B, 0x02C00161,
+    0xB03C0300, 0x01140003, 0x18C00161, 0x718C0300, 0x00000007, 0x18C01A10, 0x3431C300,
+    0x0D14638F, 0x18C00143, 0xB18C0301, 0x60A00003, 0x18C00191, 0x318C0300,
+};
+// Its indexed sibling, [topology, index count, instances, first index, base vertex, base
+// instance], the last five an NVN DrawElementsIndirect record.
+constexpr std::array<u32, 42> DRAW_INDEXED_INSTANCED_MACRO{
+    0x00000003, 0x1D180000, 0x31C20300, 0x00940003, 0x18C0017D, 0xF1C10300, 0x3C745437,
+    0x1D000111, 0xB1C08300, 0x6A201903, 0x18C00638, 0xF00C0300, 0x20200003, 0x00C00000,
+    0x301C0300, 0x00000003, 0x18C02001, 0x702C7700, 0x2C3417E3, 0x03C00161, 0xB04C0300,
+    0x01140003, 0x18C00161, 0x718C0300, 0x00000007, 0x22109A10, 0x34424300, 0x00000003,
+    0x18C007FF, 0x702C7700, 0x9D141437, 0x18C00111, 0xB18C0300, 0x0D14638F, 0x18C00143,
+    0xB18C0300, 0x60A00003, 0x18C00190, 0x318C0301, 0x00A00003, 0x18C00000, 0x318C0300,
+};
+
+// EDEN_NX2_INDIRECT_MACRO=0: flush the record and run the macro on it instead.
+bool FrontIndirectDrawsEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_INDIRECT_MACRO");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
 
 // EDEN_NX2_SPLIT_VERIFY=1: every 4096 front macro calls, wait for the back and compare the
 // front's registers with the back's (logs and resynchronizes differences).
@@ -841,6 +889,8 @@ bool FrontHandledOutsideDrawManager(u32 method) {
         return true;
     }
     switch (method) {
+    case Maxwell3D::RootTables::SelectMethod:
+    case Maxwell3D::RootTables::LoadMethod:
     case MAXWELL3D_REG_INDEX(wait_for_idle):
     case MAXWELL3D_REG_INDEX(shadow_ram_control):
     case MAXWELL3D_REG_INDEX(load_mme.instruction_ptr):
@@ -1085,7 +1135,10 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
     auto& engine = GetNativeMacroEngine();
     const auto positions = GetNativeMacroPositions();
     const u32 start = positions[((method - MacroRegistersStart) >> 1) % positions.size()];
-    {
+    const GPUVAddr indirect_record = std::exchange(fs.indirect_parameters, 0);
+    if (indirect_record != 0 && fs.parameters.size() == (fs.indirect_indexed ? 6U : 5U)) {
+        FrontDrawIndirect(system, split, fs, indirect_record, fs.indirect_indexed);
+    } else {
         VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Macro};
         engine.native_interpreter.active_dram = &native_data_ram;
         if (!engine.native_jit) {
@@ -1093,10 +1146,30 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
         }
         engine.native_jit->Prepare(engine.native_code, engine.native_code_generation);
         const auto parameter_count = fs.parameters.size();
+        // TEMP diagnostic (EDEN_NX2_MME_TRACE=<dir>): dump the macro code once and trace the
+        // first calls of the macro at 0x1d2 (parameters and emitted methods).
+        static const char* const trace_dir = std::getenv("EDEN_NX2_MME_TRACE");
+        static u32 traced_calls{};
+        const bool trace = trace_dir != nullptr && start == 0x1d2 && traced_calls < 64;
+        std::vector<u32> trace_parameters;
+        std::vector<std::pair<u32, u32>> trace_writes;
+        if (trace) {
+            if (traced_calls == 0) {
+                std::ofstream code(std::string{trace_dir} + "/mme-code.bin", std::ios::binary);
+                code.write(reinterpret_cast<const char*>(engine.native_code.data()),
+                           sizeof(engine.native_code));
+                std::ofstream pos(std::string{trace_dir} + "/mme-positions.bin", std::ios::binary);
+                pos.write(reinterpret_cast<const char*>(positions.data()), positions.size_bytes());
+            }
+            trace_parameters = fs.parameters;
+        }
         const auto result = engine.native_jit->Execute(
             start, fs.parameters, std::span<u32>{native_data_ram},
             [&fs](u32 address) { return address < Regs::NUM_REGS ? fs.regs[address] : 0U; },
             [&](u32 address, u32 value) {
+                if (trace && trace_writes.size() < 96) {
+                    trace_writes.emplace_back(address, value);
+                }
                 if (address >= MacroRegistersStart) {
                     return false;
                 }
@@ -1107,10 +1180,23 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
                 }
                 return true;
             });
+        if (trace) {
+            ++traced_calls;
+            std::string writes;
+            for (const auto& [address, value] : trace_writes) {
+                writes += fmt::format(" {:#x}={:#x}", address, value);
+            }
+            LOG_INFO(HW_GPU, "MME trace 0x1d2 #{}: ok={} parameters [{:#x}] writes{}", traced_calls,
+                     result.success, fmt::join(trace_parameters, ", "), writes);
+        }
         if (!result.success) {
             engine.native_execution_failed = true;
-            LOG_ERROR(HW_GPU, "Native MME (JIT, split front) failed: start={:#x}, consumed={}/{}, error={}",
-                      start, result.consumed, parameter_count, result.error);
+            // Parameters and the DMA read source tell garbage input (Hyrule Warriors' macro 0x1d2
+            // runs away on words that look like text) from a lowering bug.
+            LOG_ERROR(HW_GPU, "Native MME (JIT, split front) failed: start={:#x}, consumed={}/{}, error={}, parameters [{:#x}], dma source {:#x}:{:#x} ram {:#x}",
+                      start, result.consumed, parameter_count, result.error,
+                      fmt::join(std::span{fs.parameters}.first(std::min<size_t>(fs.parameters.size(), 8)), ", "),
+                      fs.regs[0x154], fs.regs[0x155], fs.regs[0x156]);
         }
     }
     fs.parameters.clear();
@@ -1127,6 +1213,110 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
 #endif
 }
 
+bool Maxwell3D::FrontTakesIndirectParameters(Core::System& system, GPUVAddr address,
+                                             u32 entry_words, u32 method_count) {
+    using Topology = Regs::PrimitiveTopology;
+    auto& fs = Front(system, VideoCommon::GpuSplit::Get());
+    if (!FrontIndirectDrawsEnabled() || fs.executing_macro == 0) {
+        return false;
+    }
+    const auto& code = GetNativeMacroEngine().native_code;
+    const auto positions = GetNativeMacroPositions();
+    const size_t start =
+        size_t{positions[((fs.executing_macro - MacroRegistersStart) >> 1) % positions.size()]} * 3;
+    const auto is_macro = [&](std::span<const u32> macro) {
+        return start + macro.size() <= code.size() &&
+               std::equal(macro.begin(), macro.end(), code.begin() + start);
+    };
+    const bool indexed = is_macro(DRAW_INDEXED_INSTANCED_MACRO);
+    if (!indexed && !is_macro(DRAW_ARRAYS_INSTANCED_MACRO)) {
+        return false;
+    }
+    // The record alone in its entry, after the topology.
+    const u32 record_words = indexed ? 5 : 4;
+    const bool record_entry = fs.parameters.size() == 1 && entry_words == record_words &&
+                              method_count == record_words;
+    if (!record_entry || static_cast<Topology>(fs.parameters[0]) == Topology::QuadStrip) {
+        static std::atomic<u32> logs{};
+        if (logs.fetch_add(1) < 16) {
+            LOG_WARNING(HW_GPU, "Draw macro parameters not drawn indirectly: {} known, entry of {} words, {} left",
+                        fs.parameters.size(), entry_words, method_count);
+        }
+    }
+    if (!record_entry) {
+        return false;
+    }
+    switch (static_cast<Topology>(fs.parameters[0])) {
+    case Topology::Points:
+    case Topology::Lines:
+    case Topology::LineStrip:
+    case Topology::Triangles:
+    case Topology::TriangleStrip:
+    case Topology::TriangleFan:
+        break;
+    case Topology::Quads:
+        // Converted on the GPU for array draws only.
+        if (indexed) {
+            return false;
+        }
+        break;
+    default:
+        return false;
+    }
+    fs.indirect_parameters = address;
+    fs.indirect_indexed = indexed;
+    static std::atomic<u32> taken{};
+    if (taken.fetch_add(1) < 4) {
+        LOG_INFO(HW_GPU, "Draw macro record at {:#x} drawn indirectly (indexed {})", address,
+                 indexed);
+    }
+    return true;
+}
+
+void Maxwell3D::FrontDrawIndirect(Core::System& system, VideoCommon::GpuSplit& split,
+                                  FrontState& fs, GPUVAddr record, bool indexed) {
+    // The macro's writes around its draw, which takes its arguments from the record on the GPU.
+    // shortcut: the base vertex and instance the shaders read (driver constants 0x640, 0x644)
+    // are taken as 0, the record's are GPU-written; copy them on the GPU if a title needs them.
+    constexpr u32 cb_offset = MAXWELL3D_REG_INDEX(const_buffer.offset);
+    constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
+    FrontWrite(split, fs, cb_offset, indexed ? 0x640 : 0x644, true, true);
+    FrontWrite(split, fs, cb_data, 0, true, true);
+    if (indexed) {
+        FrontWrite(split, fs, cb_data + 1, 0, true, true);
+    }
+    split.Defer([this, system_ptr = &system, record, topology = fs.parameters[0], indexed] {
+        BackDrawIndirect(*system_ptr, record, topology, indexed);
+    });
+    if (indexed) {
+        FrontWrite(split, fs, MAXWELL3D_REG_INDEX(vertex_id_base), 0, true, true);
+        FrontWrite(split, fs, MAXWELL3D_REG_INDEX(global_base_vertex_index), 0, true, true);
+    }
+    FrontWrite(split, fs, MAXWELL3D_REG_INDEX(global_base_instance_index), 0, true, true);
+}
+
+void Maxwell3D::BackDrawIndirect(Core::System& system, GPUVAddr record, u32 topology,
+                                 bool indexed) {
+    FinishFrontMacro(system);
+    auto& params = draw_manager.indirect_state;
+    params.is_byte_count = false;
+    params.is_indexed = indexed;
+    params.include_count = false;
+    params.count_start_address = 0;
+    params.indirect_start_address = record;
+    params.buffer_size = (indexed ? 5 : 4) * sizeof(u32);
+    params.max_draw_counts = 1;
+    params.stride = 0;
+    const auto primitive = static_cast<Regs::PrimitiveTopology>(topology);
+    if (indexed) {
+        dirty.flags[VideoCommon::Dirty::IndexBuffer] = true;
+        draw_manager.DrawIndexedIndirect(*this, primitive, 0,
+                                         static_cast<u32>(EstimateIndexBufferSize()));
+    } else {
+        draw_manager.DrawArrayIndirect(*this, primitive);
+    }
+}
+
 void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
                              u32 count) {
     // The words may be written by methods still queued for the back (indirect draw arguments
@@ -1139,11 +1329,18 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }
-    if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
-        memory_manager.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+    // Query reports too (occlusion-based conditional rendering, see MacroEngine::ReadNativeMemory);
+    // the back is drained, so its caches are safe to flush from here.
+    constexpr auto flush_caches = VideoCommon::CacheType::BufferCache | VideoCommon::CacheType::QueryCache;
+    if (memory_manager.IsMemoryDirty(source, read_bytes, flush_caches)) {
+        memory_manager.FlushRegion(source, read_bytes, flush_caches);
     }
+    // One block read, as the back's MacroEngine::ReadNativeMemory does (each Read translated its
+    // page again).
+    std::array<u32, 0x1000> dma_words;
+    memory_manager.ReadWordsUnsafe(source, dma_words.data(), words);
     for (u32 i = 0; i < words; ++i) {
-        const u32 word = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
+        const u32 word = dma_words[i];
         if (method == 0x158) {
             fs.parameters.push_back(word);
         } else if (ram + i < native_data_ram.size()) {

@@ -6,9 +6,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include "common/common_types.h"
@@ -43,6 +46,9 @@ inline bool Nx2NeedsBufferDownloads() {
 // reads the command list. One bit per 4 KiB of the 36-bit device address space (2 MiB).
 inline constexpr u64 Nx2WrittenPageBits = 12;
 inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_gpu_written_pages{};
+/// Counts the times pages were marked GPU-written for the first time: it stops moving once a
+/// title has written all the memory it reuses (Nx2CheckCommandPagesFirst).
+inline std::atomic<u64> g_nx2_gpu_written_generation{};
 
 inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
     if (size == 0) {
@@ -57,9 +63,39 @@ inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
         const u64 bits = (~u64{0} >> (63 - high)) & (~u64{0} << low);
         auto& word = g_nx2_gpu_written_pages[index];
         if ((word.load(std::memory_order_relaxed) & bits) != bits) {
-            word.fetch_or(bits, std::memory_order_relaxed);
+            if ((word.fetch_or(bits, std::memory_order_relaxed) & bits) != bits) {
+                g_nx2_gpu_written_generation.fetch_add(1, std::memory_order_relaxed);
+            }
         }
     }
+}
+
+// GPU-written device pages the front has read command lists from (same layout as above). The
+// buffer cache copies these pages into host memory right after the compute or copy work that
+// writes them and submits, so the front reads the copy once the GPU is done instead of draining
+// the split and flushing the caches (BufferCache::Nx2ReadListCopy).
+inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_command_list_pages{};
+inline std::atomic<bool> g_nx2_has_command_list_pages{false};
+
+inline void Nx2MarkCommandListPage(u64 device_address) {
+    const u64 page = device_address >> Nx2WrittenPageBits;
+    if (page >= g_nx2_command_list_pages.size() * 64) {
+        return;
+    }
+    auto& word = g_nx2_command_list_pages[page / 64];
+    const u64 bit = u64{1} << (page % 64);
+    if ((word.load(std::memory_order_relaxed) & bit) == 0) {
+        word.fetch_or(bit, std::memory_order_relaxed);
+        g_nx2_has_command_list_pages.store(true, std::memory_order_relaxed);
+    }
+}
+
+[[nodiscard]] inline bool Nx2IsCommandListPage(u64 device_address) {
+    const u64 page = device_address >> Nx2WrittenPageBits;
+    if (page >= g_nx2_command_list_pages.size() * 64) {
+        return false;
+    }
+    return (g_nx2_command_list_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
 }
 
 /// A new emulation session starts: no page has been written by its GPU yet.
@@ -67,6 +103,10 @@ inline void Nx2ClearGpuWrittenPages() {
     for (auto& word : g_nx2_gpu_written_pages) {
         word.store(0, std::memory_order_relaxed);
     }
+    for (auto& word : g_nx2_command_list_pages) {
+        word.store(0, std::memory_order_relaxed);
+    }
+    g_nx2_has_command_list_pages.store(false, std::memory_order_relaxed);
 }
 
 [[nodiscard]] inline bool Nx2IsGpuWritten(u64 device_address) {
@@ -94,6 +134,36 @@ template <typename Translate>
         if (page == (last & ~mask)) {
             return false;
         }
+    }
+}
+
+template <typename Drain, typename Translate, typename Flush>
+void Nx2SynchronizeGpuWrittenCommands(GPUVAddr address, size_t size, Drain&& drain,
+                                     Translate&& translate, Flush&& flush) {
+    if (size == 0) return;
+    drain();
+    if (Nx2HasGpuWrittenPage(address, size, translate)) flush();
+}
+
+/// Whether the GPU thread split's front may check a command list's GPU-written page bits before
+/// waiting for the back, once no page has been marked for the first time in a while
+/// (DmaPusher::FlushGpuWrittenCommands). Draining first for every GPFIFO entry stalled Mario Tennis
+/// Fever's front ~40% of the time; checking first misses only a page's very first GPU write while
+/// it is still queued on the back. EDEN_NX2_CMD_DRAIN=1 always drains first, =0 checks first for
+/// every title.
+inline bool Nx2CheckCommandPagesFirst() {
+    static const int forced = [] {
+        const char* value = std::getenv("EDEN_NX2_CMD_DRAIN");
+        return value == nullptr ? -1 : (value[0] == '0' ? 1 : 0);
+    }();
+    if (forced >= 0) {
+        return forced == 1;
+    }
+    switch (g_nx2_program_id.load(std::memory_order_relaxed)) {
+    case 0x0400D4201C6EA000ULL: // Mario Tennis Fever
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -136,8 +206,9 @@ inline void Nx2ClearSemaphoreRegions() {
 // Switch 2 sparse regions (nx2:gpu 214, word 7 bit 0x200: title 1's terrain texture arrays and
 // layer pools, 170 MB-5.8 GB each, of which the game fills a little) get memory per block when the
 // GPU first writes there, not in full. nx2:gpu installs the handler and the span its regions cover;
-// the GPU memory manager calls Nx2BackSparseWrite before each write.
-using Nx2SparseBackingHandler = std::function<void(u64 gpu_address, u64 size)>;
+// the GPU memory manager calls Nx2BackSparseWrite before each write, with the bytes it writes
+// (blocks nobody wrote that only get zeros need no memory: they read zero already).
+using Nx2SparseBackingHandler = std::function<void(u64 gpu_address, u64 size, const u8* data)>;
 inline std::recursive_mutex g_nx2_sparse_backing_mutex;
 inline Nx2SparseBackingHandler g_nx2_sparse_backing;
 inline std::atomic<u64> g_nx2_sparse_low{~u64{0}};
@@ -161,14 +232,14 @@ inline void Nx2AddSparseSpan(u64 gpu_address, u64 size) {
     }
 }
 
-inline void Nx2BackSparseWrite(u64 gpu_address, u64 size) {
+inline void Nx2BackSparseWrite(u64 gpu_address, u64 size, const void* data) {
     if (gpu_address + size <= g_nx2_sparse_low.load(std::memory_order_relaxed) ||
         gpu_address >= g_nx2_sparse_high.load(std::memory_order_relaxed)) [[likely]] {
         return;
     }
     std::scoped_lock lk{g_nx2_sparse_backing_mutex};
     if (g_nx2_sparse_backing) {
-        g_nx2_sparse_backing(gpu_address, size);
+        g_nx2_sparse_backing(gpu_address, size, static_cast<const u8*>(data));
     }
 }
 
@@ -179,14 +250,23 @@ struct Nx2SparseRegionState {
     u64 size;
     u64 block_size;
     std::vector<bool> written;
+    /// Once the game maps its own memory into the region (nx2:gpu 216): which tiles it maps.
+    /// Only those hold data then (writes elsewhere are dropped, as on the console).
+    std::vector<bool> mapped_pages;
 };
+
+/// Coverage granularity of accepted guest GPU mappings, independent of host sparse blocks.
+inline constexpr u64 Nx2SparseMappingPageSize = 4ULL << 10;
 inline std::mutex g_nx2_sparse_state_mutex;
 inline std::map<u64, Nx2SparseRegionState> g_nx2_sparse_state;
 
 inline void Nx2SparseRegionCreated(u64 gpu_address, u64 size, u64 block_size) {
+    if (size == 0 || block_size == 0 || size > (std::numeric_limits<u64>::max)() - gpu_address) {
+        return;
+    }
     std::scoped_lock lk{g_nx2_sparse_state_mutex};
-    g_nx2_sparse_state[gpu_address] = {size, block_size,
-                                       std::vector<bool>((size + block_size - 1) / block_size)};
+    g_nx2_sparse_state[gpu_address] = {
+        size, block_size, std::vector<bool>(size / block_size + (size % block_size != 0))};
 }
 
 inline void Nx2SparseRegionDestroyed(u64 gpu_address) {
@@ -202,9 +282,77 @@ inline void Nx2ClearSparseRegions() {
 
 inline void Nx2SparseBlockWritten(u64 region_address, u64 block) {
     std::scoped_lock lk{g_nx2_sparse_state_mutex};
-    if (const auto it = g_nx2_sparse_state.find(region_address); it != g_nx2_sparse_state.end()) {
+    if (const auto it = g_nx2_sparse_state.find(region_address);
+        it != g_nx2_sparse_state.end() && block < it->second.written.size()) {
         it->second.written[block] = true;
     }
+}
+
+/// True unless the block of the region at region_address is known to hold nothing (no write from
+/// the CPU or the GPU yet).
+inline bool Nx2SparseBlockIsWritten(u64 region_address, u64 block) {
+    std::scoped_lock lk{g_nx2_sparse_state_mutex};
+    const auto it = g_nx2_sparse_state.find(region_address);
+    return it == g_nx2_sparse_state.end() || block >= it->second.written.size() ||
+           it->second.written[block];
+}
+
+/// The game maps its own memory over [offset, +size) of the region at region_address (mapped), or
+/// unmaps it there.
+inline void Nx2SparseTilesMapped(u64 region_address, u64 offset, u64 size, bool mapped) {
+    std::scoped_lock lk{g_nx2_sparse_state_mutex};
+    const auto it = g_nx2_sparse_state.find(region_address);
+    if (it == g_nx2_sparse_state.end() || size == 0) {
+        return;
+    }
+    auto& region = it->second;
+    if (offset >= region.size || size > region.size - offset) {
+        return;
+    }
+    if (region.mapped_pages.empty()) {
+        region.mapped_pages.resize(region.size / Nx2SparseMappingPageSize +
+                                   (region.size % Nx2SparseMappingPageSize != 0));
+    }
+    const u64 last = (offset + size - 1) / Nx2SparseMappingPageSize;
+    for (u64 tile = offset / Nx2SparseMappingPageSize; tile <= last; ++tile) {
+        region.mapped_pages[tile] = mapped;
+    }
+}
+
+/// The parts of [gpu_address, +size), which lies in one sparse region, that can hold data: the
+/// tiles the game maps there if it maps any, otherwise the blocks written. As (offset from
+/// gpu_address, size) runs.
+inline std::vector<std::pair<u64, u64>> Nx2SparseDataRanges(u64 gpu_address, u64 size) {
+    std::vector<std::pair<u64, u64>> ranges;
+    std::scoped_lock lk{g_nx2_sparse_state_mutex};
+    auto it = g_nx2_sparse_state.upper_bound(gpu_address);
+    if (it == g_nx2_sparse_state.begin()) {
+        return ranges;
+    }
+    --it;
+    const auto& [start, region] = *it;
+    if (size == 0 || gpu_address - start >= region.size ||
+        size > region.size - (gpu_address - start)) {
+        return ranges;
+    }
+    const bool by_tile = !region.mapped_pages.empty();
+    const u64 unit = by_tile ? Nx2SparseMappingPageSize : region.block_size;
+    const std::vector<bool>& present = by_tile ? region.mapped_pages : region.written;
+    const u64 begin = gpu_address - start;
+    const u64 end = begin + size;
+    for (u64 index = begin / unit; index * unit < end && index < present.size(); ++index) {
+        if (!present[index]) {
+            continue;
+        }
+        const u64 run_begin = (std::max)(index * unit, begin) - begin;
+        const u64 run_end = index * unit + (std::min)(unit, end - index * unit) - begin;
+        if (!ranges.empty() && ranges.back().first + ranges.back().second == run_begin) {
+            ranges.back().second += run_end - run_begin;
+        } else {
+            ranges.emplace_back(run_begin, run_end - run_begin);
+        }
+    }
+    return ranges;
 }
 
 /// True when [gpu_address, +size) lies in one sparse region.

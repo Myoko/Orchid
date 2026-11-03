@@ -44,7 +44,9 @@ enum class GPUVendor {
 };
 
 enum class TitleID : std::uint64_t {
-    NinjaGaidenRagebound = 0x0100781020710000ULL
+    NinjaGaidenRagebound = 0x0100781020710000ULL,
+    MarioTennisFever = 0x0400D4201C6EA000ULL,
+    HyruleWarriorsAgeOfImprisonment = 0x04003F40232DE000ULL,
 };
 
 struct EnvironmentInfo {
@@ -56,5 +58,9 @@ struct EnvironmentInfo {
 EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer);
 
 void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer);
+
+/// Title defaults for settings read while the renderer is created, applied before that (no
+/// renderer to look at yet). Same rule as LoadOverrides: only where the user kept the global value.
+void LoadEarlyOverrides(std::uint64_t program_id);
 
 } // namespace Core::GameSettings

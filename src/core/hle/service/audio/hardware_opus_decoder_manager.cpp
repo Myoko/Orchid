@@ -26,6 +26,7 @@ IHardwareOpusDecoderManager::IHardwareOpusDecoderManager(Core::System& system_)
         {7, D<&IHardwareOpusDecoderManager::GetWorkBufferSizeForMultiStreamEx>, "GetWorkBufferSizeForMultiStreamEx"},
         {8, D<&IHardwareOpusDecoderManager::GetWorkBufferSizeExEx>, "GetWorkBufferSizeExEx"},
         {9, D<&IHardwareOpusDecoderManager::GetWorkBufferSizeForMultiStreamExEx>, "GetWorkBufferSizeForMultiStreamExEx"},
+        {100, D<&IHardwareOpusDecoderManager::Unknown100>, "Unknown100 (S2)"},
     };
     // clang-format on
     RegisterHandlers(functions);
@@ -153,6 +154,13 @@ Result IHardwareOpusDecoderManager::GetWorkBufferSizeForMultiStreamExEx(
     Out<u32> out_size, InLargeData<OpusMultiStreamParametersEx, BufferAttr_HipcPointer> params) {
     R_TRY(impl.GetWorkBufferSizeForMultiStreamExEx(*params, *out_size));
     LOG_DEBUG(Service_Audio, "size {:#x}", *out_size);
+    R_SUCCEED();
+}
+
+Result IHardwareOpusDecoderManager::Unknown100(
+    Out<SharedPointer<IHardwareAudioCodecClientSession>> out_session) {
+    LOG_WARNING(Service_Audio, "Switch 2 hwopus cmd 100 called, returning hwacod IClientSession");
+    *out_session = std::make_shared<IHardwareAudioCodecClientSession>(system);
     R_SUCCEED();
 }
 

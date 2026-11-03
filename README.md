@@ -9,85 +9,122 @@
 
 <h1 align="center">
   <br>
-  <a href="https://git.eden-emu.dev/eden-emu/eden"><img src="https://github.com/user-attachments/assets/35031845-4bfa-4916-8bf5-bc3bce67d5e2" alt="Eglantine" width="200"></a>
+  <img src="https://github.com/user-attachments/assets/35031845-4bfa-4916-8bf5-bc3bce67d5e2" alt="Eglantine" width="200">
   <br>
-  <b>Eglantine</b>
+  <b>Eglantine (MythosOfs fork)</b>
   <br>
 </h1>
 
-<h4 align="center"><b>Eglantine</b> is a free and opensource (FOSS) Switch 2 emulator, derived from Eden, Yuzu and Sudachi - started by developer Camille LaVey.
-It's written in C++ with portability in mind, with builds for Windows, Linux and macOS
-</h4>
-
-<p align="center">
-    </a>
-    <a href="https://discord.gg/jCCZ58VExk">
-        <img src="https://img.shields.io/discord/1367654015269339267?color=5865F2&label=Eglantine&logo=discord&logoColor=white"
-            alt="Discord">
-    </a>
-  
-</p>
+<h4 align="center">A very experimental Switch 2 emulator. This fork builds on
+<a href="https://github.com/zortos293/Eglantine">zortos293/Eglantine</a> and carries fixes aimed at
+Mario Tennis Fever first, plus the shader, kernel and graphics work other games need.</h4>
 
 > [!NOTE]
-> **This is an unofficial fork of Eglantine maintained by Zortos.** It carries fixes that are not in the upstream [Eglantine](https://github.com/Djihads80/Eglantine) repository. Please report problems with this build here, not to the upstream developers.
-
-## About this fork
-
-My priority is getting every game to boot and run. Performance comes second.
-
-Changes in this fork compared to upstream:
-
-- **Memory leak fixed.** Memory use stays around 4-5 GB instead of climbing past 20 GB.
-- **More games boot**, including Welcome Tour.
-- **Games run at normal speed.** The slowdown is gone.
-- **Big performance boost.** Most games run at 60 FPS.
-- **Texture fixes** in several games.
-- **Color fix** for the HDR setting in docked mode.
-- **Graphics fixes.** Video codec fixes are coming soon.
+> This is an unofficial fork. Problems with these builds are not caused by the zortos293, Eglantine
+> or Eden developers, so please do not report them there.
 
 <p align="center">
-  <a href="#about-this-fork">About this fork</a> |
-  <a href="#compatibility">Compatibility</a> |
-  <a href="#development">Development</a> |
-  <a href="#building">Building</a> |
+  <a href="#branches-and-builds">Branches and builds</a> |
+  <a href="#what-this-fork-changes">What this fork changes</a> |
   <a href="#download">Download</a> |
-  <a href="#support">Support</a> |
+  <a href="#build-the-newest-commit-yourself">Build it yourself</a> |
+  <a href="#documentation">Documentation</a> |
   <a href="#license">License</a>
 </p>
 
-## Compatibility
+## Branches and builds
 
-The emulator is capable of running Mario Kart World at decent/full speed depending on specs and configurations, and Splatoon Raiders at variable performances
+| Branch | Channel | Release name |
+|---|---|---|
+| `main` | stable | `v0.<minor>.<patch>`, regular release |
 
-A list of supported games will be available in future. Please be patient.
+`.github/version` sets the minor version; CI counts the patch up. In 0.5 all branches were merged
+into `main` (formerly `mario-tennis-fever`), including the experimental `mario-tennis-fever-perf`.
 
-## Development
-For development discussions, please join us on [Discord](https://discord.gg/jCCZ58VExk)
+Commits land often, but they do not start a build. Release builds are started by hand
+(Actions > release-binaries > Run workflow), so the newest release can be several commits behind
+its branch. To run the newest commit, [build it yourself](#build-the-newest-commit-yourself).
 
-If you would like to contribute, we are open to new developers and pull requests. Please ensure that your work is of a high standard and properly documented. You can also contact any of the developers on Discord or Stoat to learn more about the current state of the emulator.
+## What this fork changes
 
-## Documentation
+Compared with zortos293/Eglantine:
 
-We have a user manual! See our [User Handbook](./docs/user/README.md).
-
-## Building
-
-See the [General Build Guide](docs/Build.md)
-
-For information on provided development tooling, see the [Tools directory](./tools)
+- **Mario Tennis Fever:** startup crash fixed, the NVIDIA crash at match start fixed, and per-game
+  defaults (low GPU accuracy, balanced fences).
+- **Shaders:** many more Ampere instructions lowered (IMAD.WIDE, IADD3 carries, LEA.HI, F2I.U64,
+  I2F from 64-bit pairs, bindless TEX modes and others), mainly from the Fire Emblem: Fortune's
+  Weave bring-up.
+- **System:** Switch 2 built-in fonts served from their own shared memory; kernel thread start and
+  finalize races fixed.
+- **Graphics:** query reports flushed before MME DMA reads, layered cross-format texture copies,
+  separate surface and texture descriptor buffers, geometry shaders and framebuffers kept within
+  device limits.
+- **Experimental branch only:** a performance pass (buffer cache, puller, memory trap and kernel
+  locking changes). Faster on some systems, less tested.
+- **Updates:** release builds check this repository for updates and only offer builds of their
+  own channel.
 
 ## Download
 
-Builds of this fork are on the [releases page](https://github.com/zortos293/eglantine/releases).
+Releases are on the [releases page](https://github.com/MythosOfs/Eglantine/releases). Each one has:
 
-Official upstream releases are [here](https://github.com/Djihads80/Eglantine/releases).
+| File | For |
+|---|---|
+| `eglantine-<version>-linux-x86_64-pgo.AppImage` | Linux, profile-guided build (preferred) |
+| `eglantine-<version>-linux-x86_64.AppImage` | Linux |
+| `eglantine-<version>-windows-x86_64-pgo.zip` | Windows, profile-guided MinGW build (preferred) |
+| `eglantine-<version>-windows-x86_64.zip` | Windows |
+| `eglantine-<version>-macos-arm64.zip` | macOS 15+ on Apple Silicon, experimental |
 
-## Support
+Linux: `chmod +x` the AppImage and run it; it needs glibc 2.39 or newer. Windows: extract the zip
+and run `eglantine.exe`.
 
-We currently do not take in any donations for the time being
+## Build the newest commit yourself
 
-If you would prefer to support us in a different way, please join our [Discord](https://discord.gg/jCCZ58VExk)
+Linux. Install the dependencies once:
+
+```sh
+# Arch / CachyOS
+sudo pacman -Syu --needed base-devel boost catch2 cmake enet ffmpeg fmt git glslang libzip lz4 \
+  ninja nlohmann-json openssl opus qt6-base qt6-multimedia qt6-charts qt6-wayland sdl3 zlib zstd \
+  zip unzip vulkan-headers vulkan-utility-libraries libusb spirv-tools spirv-headers
+```
+
+Ubuntu 26.04, Debian 13 and other distributions: see [docs/Deps.md](docs/Deps.md).
+
+Clone `main`, configure and build:
+
+```sh
+git clone https://github.com/MythosOfs/Eglantine.git
+cd Eglantine
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DYUZU_TESTS=OFF \
+  -DVulkanHeaders_FORCE_BUNDLED=ON -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
+cmake --build build
+./build/bin/eglantine
+```
+
+Later, to move to the newest commit (only changed files get rebuilt):
+
+```sh
+git pull
+cmake --build build
+```
+
+The first configure downloads further dependencies into `.cache/cpm`; the two Vulkan flags use the
+bundled headers, as the release builds do, so a newer system Vulkan package cannot break the build. A self-built binary has no
+update checker; `git pull` is the update. Windows (MSVC) and macOS builds are described in the
+[build guide](docs/Build.md).
+
+## Documentation
+
+- [User handbook](docs/user/README.md)
+- [Build guide](docs/Build.md) and [dependencies](docs/Deps.md)
+- [Fire Emblem: Fortune's Weave bring-up notes](docs/FE_FORTUNES_WEAVE.md)
+- [Switch 2 loading notes](NX2_NOTES.md)
+- [Development tools](tools)
 
 ## License
 
-Eglantine is licensed under the GPLv3 (or any later version). Refer to the [LICENSE.txt](https://github.com/Djihads80/Eglantine/blob/nx2/LICENSE.txt) file.
+GPLv3 or any later version, see [LICENSE.txt](LICENSE.txt). Based on
+[zortos293/Eglantine](https://github.com/zortos293/Eglantine), Eglantine,
+[Eden](https://git.eden-emu.dev/eden-emu/eden), yuzu and Sudachi.

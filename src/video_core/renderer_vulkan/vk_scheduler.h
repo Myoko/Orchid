@@ -107,6 +107,7 @@ public:
         if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
         }
+        ++record_count;
         if (chunk->Record(command)) {
             return;
         }
@@ -133,6 +134,11 @@ public:
             std::this_thread::sleep_for(std::chrono::microseconds{100});
         }
         return true;
+    }
+
+    /// Commands recorded so far (any kind), to tell whether anything was recorded since.
+    [[nodiscard]] u64 RecordCount() const noexcept {
+        return record_count;
     }
 
     /// Returns the current command buffer tick.
@@ -329,6 +335,7 @@ private:
     DeferredClear deferred_clear;
 
     std::unique_ptr<CommandChunk> chunk;
+    u64 record_count{};
     std::function<void()> on_submit;
 
     State state;

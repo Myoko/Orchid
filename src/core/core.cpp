@@ -18,6 +18,7 @@
 #include "common/string_util.h"
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
+#include "core/arm/debug.h"
 
 #include "launch_timestamp_cache.h"
 #include "core/core_timing.h"
@@ -25,6 +26,7 @@
 #include "core/debugger/debugger.h"
 #include "core/device_memory.h"
 #include "core/file_sys/fs_filesystem.h"
+#include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/program_metadata.h"
 #include "core/file_sys/registered_cache.h"
@@ -116,9 +118,27 @@ namespace {
 
 // Switch 2 titles boot as a loose ExeFS, with main.npdm next to main.
 bool IsSwitch2Program(const FileSys::VirtualFile& file) {
+    FileSys::ProgramMetadata metadata;
+    if (FileSys::NupContainer::IsNupFile(file)) {
+        FileSys::NupContainer nup{file};
+        if (nup.GetStatus() != Loader::ResultStatus::Success) {
+            return false;
+        }
+        std::optional<std::size_t> program;
+        if (const auto base = nup.FindBasePackage();
+            base && nup.GetExeFSDir(*base) != nullptr) {
+            program = base;
+        } else if (const auto update = nup.FindBestUpdatePackage();
+                   update && nup.GetExeFSDir(*update) != nullptr) {
+            program = update;
+        }
+        const auto exefs = program ? nup.GetExeFSDir(*program) : nullptr;
+        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
+        return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
+               metadata.IsSwitch2();
+    }
     const auto dir = file != nullptr ? file->GetContainingDirectory() : nullptr;
     const auto npdm = dir != nullptr ? dir->GetFile("main.npdm") : nullptr;
-    FileSys::ProgramMetadata metadata;
     return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
            metadata.IsSwitch2();
 }
@@ -387,6 +407,9 @@ struct System::Impl {
         // Make the process created be the application
         kernel.SetApplicationProcess(process->GetHandle());
 
+        // Title defaults the renderer reads while it is created.
+        GameSettings::LoadEarlyOverrides(params.program_id);
+
         // Set up the rest of the system.
         SystemResultStatus init_result{SetupForApplicationProcess(system, emu_window)};
         if (init_result != SystemResultStatus::Success) {
@@ -396,6 +419,7 @@ struct System::Impl {
         }
         // Waiting for GPU before initializing CPU
         cpu_manager.Initialize();
+        Core::StartPkpSampler(system); // ponytail: EDEN_PKP_BT diagnostics only
 
         // Initialize cheat engine
         if (cheat_engine) {
@@ -661,6 +685,15 @@ size_t System::GetCurrentHostThreadID() const {
 
 std::span<GPUDirtyMemoryManager> System::GetGPUDirtyMemoryManager() {
     return impl->gpu_dirty_memory_managers;
+}
+
+bool System::HasGPUDirtyMemory() {
+    for (const auto& manager : impl->gpu_dirty_memory_managers) {
+        if (manager.HasPending()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void System::GatherGPUDirtyMemory(std::function<void(PAddr, size_t)>& callback) {

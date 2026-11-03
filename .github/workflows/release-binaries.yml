@@ -1,38 +1,21 @@
 name: release-binaries
 
+# Manual only: Actions > release-binaries > Run workflow, or `gh workflow run release-binaries.yml --ref <branch>`.
+# Pushes and pull requests never start a build.
 on:
-  pull_request:
-    branches:
-      - nx2
-      - nx2-experimental
   workflow_dispatch:
     inputs:
       publish_release:
         description: Publish the binaries as a GitHub release
         type: boolean
         default: true
-  push:
-    branches:
-      - nx2
-      - nx2-experimental
-    # A binary only changes when build inputs change; docs-only pushes skip the build.
-    paths:
-      - "src/**"
-      - "CMakeLists.txt"
-      - "CMakeModules/**"
-      - "externals/**"
-      - "dist/**"
-      - "tools/**"
-      - ".patch/**"
-      - "cpmfile.json"
-      - ".github/workflows/release-binaries.yml"
 
 permissions:
   contents: read
 
-# Clang major the Linux PGO build uses, from apt.llvm.org. Eden's profile is written by a current
-# clang and an older reader refuses it, so this has to stay at or above whatever produced
-# eden.profdata; bump it when a refreshed profile needs a newer LLVM.
+# Clang major the Linux PGO build uses, from apt.llvm.org. A profile is written by a current clang
+# and an older reader refuses it, so this has to stay at or above whatever produced
+# eglantine.profdata; bump it when a refreshed profile needs a newer LLVM.
 env:
   PGO_LLVM_VERSION: '23'
 
@@ -41,13 +24,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Every build is named v0.<minor>.<patch>, with -<channel> appended on every channel but stable:
+  # its release tag, its version string, and the prefix of its release files. The branch picks
+  # minor and channel in .github/version ("0.4" on the stable branch, "0.4-experimental" on the
+  # experimental one); the patch counts up from 0 per minor and channel. Pull requests get a
+  # -pr<number> channel that is never released. The update checker only offers its own channel.
+  name:
+    name: Name the build
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.name.outputs.channel }}
+      tag: ${{ steps.name.outputs.tag }}
+      previous: ${{ steps.name.outputs.previous }}
+    steps:
+      - name: Check out version file
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/version
+          sparse-checkout-cone-mode: false
+
+      - id: name
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          set -euo pipefail
+          read -r base < .github/version
+          minor=${base%%-*}
+          suffix=${base#"$minor"}
+          [[ $minor =~ ^0\.[0-9]+$ && ( -z $suffix || $suffix =~ ^-[a-z]+$ ) ]] \
+            || { echo "::error::.github/version must read 0.<minor> or 0.<minor>-<channel>, not '$base'"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            echo "channel=pr-$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "tag=v$minor.0$suffix-pr$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          channel=${suffix#-}
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
+          # Newest release of this channel, for the changelog; then the highest patch of this minor.
+          previous=$(grep -m1 -E "^v[0-9]+\.[0-9]+\.[0-9]+$suffix\$" <<< "$tags" || true)
+          last=$(sed -nE "s/^v${minor//./\\.}\.([0-9]+)$suffix\$/\1/p" <<< "$tags" | sort -n | tail -n 1)
+          tag="v$minor.$(( ${last:--1} + 1 ))$suffix"
+          echo "channel=${channel:-stable}" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Build $tag, previous release of the channel: ${previous:-none}"
+
   build:
     name: ${{ matrix.platform }} binary
+    needs: name
     runs-on: ${{ matrix.runner }}
     env:
+      BUILD_TAG: ${{ needs.name.outputs.tag }}
+      ASSET_NAME: eglantine-${{ needs.name.outputs.tag }}-${{ matrix.platform }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 1500M
+      CCACHE_MAXSIZE: 3000M
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: 3G
     strategy:
       fail-fast: false
       matrix:
@@ -56,9 +90,11 @@ jobs:
             runner: ubuntu-24.04
           - platform: macos-arm64
             runner: macos-15
-          # The two -pgo builds are the same programs compiled by clang against Eden's periodically
-          # updated profile (https://github.com/Eden-CI/PGO). Windows uses MSYS2's MinGW clang like
-          # Eden does; MSVC cannot read an LLVM .profdata file.
+          # The -pgo builds are the same programs compiled by clang against the repo's
+          # eglantine.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
+          # Kart World ran at about half the speed of the normal build, with eglantine.profdata at
+          # about the same speed. Windows uses MSYS2's MinGW clang like Eden does; MSVC cannot read
+          # an LLVM .profdata file.
           - platform: linux-x86_64-pgo
             runner: ubuntu-24.04
             pgo: true
@@ -68,10 +104,15 @@ jobs:
             runner: windows-2022
             pgo: true
             mingw: true
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - platform: linux-aarch64-pgo
+            runner: ubuntu-24.04-arm
+            pgo: true
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'linux')
@@ -86,16 +127,29 @@ jobs:
             libswscale-dev pkg-config zlib1g-dev libva-dev libvdpau-dev \
             spirv-tools spirv-headers libusb-1.0-0-dev \
             libboost-dev libboost-fiber-dev libboost-context-dev \
-            libopus-dev libasound2-dev ccache
+            libopus-dev libasound2-dev ccache \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
 
-      - name: Install Qt on Linux
-        if: startsWith(matrix.platform, 'linux')
+      - name: Install Qt on Linux x86_64
+        if: startsWith(matrix.platform, 'linux') && runner.arch != 'ARM64'
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
           host: linux
           target: desktop
           arch: linux_gcc_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install Qt on Linux ARM64
+        if: startsWith(matrix.platform, 'linux') && runner.arch == 'ARM64'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: linux_arm64
+          target: desktop
+          arch: linux_gcc_arm64
           modules: qtcharts
           cache: true
 
@@ -137,16 +191,13 @@ jobs:
             "clang-$PGO_LLVM_VERSION" "lld-$PGO_LLVM_VERSION"
           "clang-$PGO_LLVM_VERSION" --version
 
-      # Fetched into the source tree so both the Linux and MSYS2 configure steps can read it from a
-      # path their clang understands.
-      - name: Download PGO profile
+      # The profile is in the source tree, where both the Linux and MSYS2 configure steps read it.
+      - name: Check PGO profile
         if: matrix.pgo
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL -o eden.profdata \
-            https://github.com/Eden-CI/PGO/releases/latest/download/eden.profdata
-          test -s eden.profdata
+          test -s eglantine.profdata
 
       - name: Set up MSVC
         if: matrix.platform == 'windows-x86_64'
@@ -193,6 +244,7 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          cache: true
           install: >-
             git make autoconf libtool automake-wrapper patch jq pactoys ninja
           pacboy: >-
@@ -204,7 +256,7 @@ jobs:
             lerc:p graphite2:p libwebp:p libtiff:p brotli:p ccache:p
 
       - name: Cache CPM downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'src/**/CMakeLists.txt') }}
@@ -212,16 +264,18 @@ jobs:
             cpm-${{ runner.os }}-${{ runner.arch }}-
 
       # The sha in the key makes every run save a fresh cache (actions/cache never saves over an
-      # exact hit), and restore-keys seeds it from the newest one of the same platform.
+      # exact hit), and restore-keys seeds it from the newest one of the same platform. The "sha-"
+      # part ends the platform name: without it "objects-linux-x86_64-" also matched the -pgo
+      # job's clang cache, and the gcc build restored that one and recompiled everything.
       - name: Cache compiler objects
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .ccache
             .sccache
-          key: objects-${{ matrix.platform }}-${{ github.sha }}
+          key: objects-${{ matrix.platform }}-sha-${{ github.sha }}
           restore-keys: |
-            objects-${{ matrix.platform }}-
+            objects-${{ matrix.platform }}-sha-
 
       - name: Configure Linux
         if: startsWith(matrix.platform, 'linux')
@@ -240,13 +294,16 @@ jobs:
             -DYUZU_USE_BUNDLED_SDL3=ON
             -DVulkanHeaders_FORCE_BUNDLED=ON
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
-            -DENABLE_UPDATE_CHECKER=OFF
+            -DENABLE_UPDATE_CHECKER=ON
+            "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY"
+            "-DEGLANTINE_BUILD_TAG=$BUILD_TAG"
+            "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}"
             -DUSE_DISCORD_PRESENCE=OFF
             -DUSE_CCACHE=ON
           )
           if [ '${{ matrix.pgo }}' = 'true' ]; then
             # Same flags Eden's CI passes for its clang PGO build.
-            profile="-fprofile-use=$PWD/eden.profdata -Wno-backend-plugin \
+            profile="-fprofile-use=$PWD/eglantine.profdata -Wno-backend-plugin \
               -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
             flags+=(
               "-DCMAKE_C_COMPILER=clang-$PGO_LLVM_VERSION"
@@ -278,7 +335,10 @@ jobs:
           -DYUZU_USE_BUNDLED_MOLTENVK=ON
           -DVulkanHeaders_FORCE_BUNDLED=ON
           -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
-          -DENABLE_UPDATE_CHECKER=OFF
+          -DENABLE_UPDATE_CHECKER=ON
+          "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY"
+          "-DEGLANTINE_BUILD_TAG=$BUILD_TAG"
+          "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}"
           -DUSE_DISCORD_PRESENCE=OFF
           -DUSE_CCACHE=ON
 
@@ -295,19 +355,22 @@ jobs:
           -DYUZU_ROOM_STANDALONE=OFF
           -DYUZU_USE_BUNDLED_QT=OFF
           -DYUZU_USE_BUNDLED_SDL3=ON
-          -DENABLE_UPDATE_CHECKER=OFF
+          -DENABLE_UPDATE_CHECKER=ON
+          "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY"
+          "-DEGLANTINE_BUILD_TAG=$BUILD_TAG"
+          "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}"
           -DUSE_DISCORD_PRESENCE=OFF
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-      # MinGW build: system Qt and libraries from MSYS2, clang plus Eden's PGO profile. The profile
+      # MinGW build: system Qt and libraries from MSYS2, clang plus the repo's PGO profile. The profile
       # path is converted to its Windows form because clang runs with the MSYS mount underneath.
       - name: Configure MinGW PGO
         if: matrix.mingw
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          profile="-fprofile-use=$(cygpath -m "$PWD/eden.profdata") -Wno-backend-plugin \
+          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
           cmake -S . -B build/release -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -321,7 +384,10 @@ jobs:
             -DYUZU_USE_BUNDLED_FFMPEG=ON \
             -DVulkanHeaders_FORCE_BUNDLED=ON \
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
-            -DENABLE_UPDATE_CHECKER=OFF \
+            -DENABLE_UPDATE_CHECKER=ON \
+            "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY" \
+            "-DEGLANTINE_BUILD_TAG=$BUILD_TAG" \
+            "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}" \
             -DUSE_DISCORD_PRESENCE=OFF \
             -DUSE_CCACHE=ON \
             -DCMAKE_C_COMPILER=clang \
@@ -348,8 +414,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: >-
-          sh tools/macos/package.sh build/release
-          "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          sh tools/macos/package.sh build/release "$ASSET_NAME.zip"
 
       - name: Build MinGW PGO
         if: matrix.mingw
@@ -357,6 +422,24 @@ jobs:
         run: |
           cmake --build build/release --target yuzu yuzu-cmd --parallel
           ccache --show-stats
+
+      - name: Stage third-party license notices
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          mkdir -p build/release/bin/licenses
+          cp -R dist/licenses/. build/release/bin/licenses/
+
+      - name: Package Linux tar.gz
+        if: startsWith(matrix.platform, 'linux')
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x build/release/bin/eglantine
+          test -x build/release/bin/eden-cli
+          strip build/release/bin/eglantine build/release/bin/eden-cli
+          tar -czf "$ASSET_NAME.tar.gz" -C build/release/bin eglantine eden-cli licenses
+          test -s "$ASSET_NAME.tar.gz"
 
       # A self-contained AppImage: linuxdeploy bundles every library the two programs need except
       # the base system ones (glibc, X11/Wayland client libraries, the GPU driver and Vulkan loader),
@@ -368,24 +451,25 @@ jobs:
           set -euo pipefail
           test -x build/release/bin/eglantine
           test -x build/release/bin/eden-cli
-          # Libraries Qt's xcb platform plugin needs, so linuxdeploy can resolve and bundle them.
-          sudo apt-get install -y --no-install-recommends libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
-            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
           tools="$RUNNER_TEMP/linuxdeploy"
           mkdir -p "$tools"
-          curl -fsSL -o "$tools/linuxdeploy-x86_64.AppImage" \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          curl -fsSL -o "$tools/linuxdeploy-plugin-qt-x86_64.AppImage" \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          arch=$(uname -m)
+          curl -fsSL -o "$tools/linuxdeploy-$arch.AppImage" \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$arch.AppImage"
+          curl -fsSL -o "$tools/linuxdeploy-plugin-qt-$arch.AppImage" \
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$arch.AppImage"
           chmod +x "$tools"/*.AppImage
           # The desktop file names its icon dev.eglantine.eglantine.
           icon="$RUNNER_TEMP/dev.eglantine.eglantine.png"
           cp dist/Eglantine.png "$icon"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
-          export LDAI_OUTPUT="eglantine-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
+          export LDAI_OUTPUT="$ASSET_NAME.AppImage"
           export OUTPUT="$LDAI_OUTPUT"
-          "$tools/linuxdeploy-x86_64.AppImage" --appdir AppDir \
+          export ARCH="$arch"
+          mkdir -p AppDir/usr/share/licenses/eglantine
+          cp -R dist/licenses/. AppDir/usr/share/licenses/eglantine/
+          "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
             --executable build/release/bin/eglantine \
             --executable build/release/bin/eden-cli \
             --desktop-file dist/dev.eden_emu.eden.desktop \
@@ -446,66 +530,76 @@ jobs:
       # zip gave a zip inside a zip. The release job zips it once for the release.
       - name: Upload Windows binary
         if: matrix.platform == 'windows-x86_64'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
+          name: ${{ env.ASSET_NAME }}
           path: build/release/bin/
           if-no-files-found: error
           retention-days: 7
 
       - name: Upload MinGW binary
         if: matrix.mingw
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
+          name: ${{ env.ASSET_NAME }}
           path: build/release/bin/
           if-no-files-found: error
           retention-days: 7
 
+      # Both Linux files go in one artifact: the tar.gz and the AppImage.
       - name: Upload Linux binary
         if: startsWith(matrix.platform, 'linux')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
-          path: eglantine-${{ github.sha }}-${{ matrix.platform }}.AppImage
+          name: ${{ env.ASSET_NAME }}
+          path: |
+            ${{ env.ASSET_NAME }}.tar.gz
+            ${{ env.ASSET_NAME }}.AppImage
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
       - name: Upload macOS binary
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
-          path: eglantine-${{ github.sha }}-${{ matrix.platform }}.zip
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ env.ASSET_NAME }}.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
       - name: Save macOS compiler cache after failure
         if: failure() && runner.os == 'macOS'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .ccache
             .sccache
-          key: objects-${{ matrix.platform }}-${{ github.sha }}
+          key: objects-${{ matrix.platform }}-sha-${{ github.sha }}
 
-  # Publishes every binary as a GitHub pre-release once every platform built: on pushes to nx2
-  # and nx2-experimental, and on manual runs unless "Publish the binaries as a GitHub release" is
-  # unticked.
+  # Publishes every binary as a GitHub release (a pre-release outside stable) once every platform
+  # built: on pushes to nx2 and nx2-experimental, and on manual runs unless "Publish the binaries as
+  # a GitHub release" is unticked.
   release:
     name: Publish release
-    needs: build
-    if: github.event_name == 'push' || inputs.publish_release
+    needs: [name, build]
+    if: inputs.publish_release
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Download binaries
-        uses: actions/download-artifact@v4
+      # Only the channel's changelog (.github/release-notes/<channel>.md).
+      - name: Check out release notes
+        uses: actions/checkout@v5
         with:
-          pattern: eglantine-*-${{ github.sha }}
+          sparse-checkout: .github/release-notes
+          path: source
+
+      - name: Download binaries
+        uses: actions/download-artifact@v7
+        with:
+          pattern: eglantine-${{ needs.name.outputs.tag }}-*
           path: artifacts
 
       - name: Package release files
@@ -516,7 +610,7 @@ jobs:
           for artifact in artifacts/*/; do
             name=$(basename "$artifact")
             if compgen -G "$artifact*.AppImage" > /dev/null; then
-              cp "$artifact"/*.AppImage dist/
+              cp "$artifact"/*.AppImage "$artifact"/*.tar.gz dist/
             elif compgen -G "$artifact*.zip" > /dev/null; then
               cp "$artifact"/*.zip dist/
             else
@@ -524,20 +618,55 @@ jobs:
             fi
           done
 
+      # The notes list the commits since the channel's previous release; the app shows users the
+      # commits since their own build.
       - name: Create release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.name.outputs.channel }}
+          BUILD_TAG: ${{ needs.name.outputs.tag }}
+          previous: ${{ needs.name.outputs.previous }}
         run: |
+          set -euo pipefail
           ls -la dist
-          gh release create "build-${GITHUB_RUN_NUMBER}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --prerelease \
-            --title "Eglantine ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
-            --notes "Automatic build of ${GITHUB_REF_NAME} at ${GITHUB_SHA}.
+          # A channel can carry a changelog, shown first. The title is the bare version:
+          # v0.4.1-experimental becomes "0.4.1 experimental".
+          channel_notes="source/.github/release-notes/$CHANNEL.md"
+          title="${BUILD_TAG#v}"
+          title="${title/-/ }"
+          # Stable builds are regular releases, so GitHub marks the newest one Latest.
+          prerelease=--prerelease
+          [ "$CHANNEL" = stable ] && prerelease=
+          {
+            if [ -f "$channel_notes" ]; then
+              cat "$channel_notes"
+              echo
+              echo "---"
+              echo
+            fi
+            if [ -n "$previous" ]; then
+              echo "## Changes since $previous"
+              echo
+              gh api "repos/$GITHUB_REPOSITORY/compare/$previous...$GITHUB_SHA" \
+                --jq '.commits | reverse | .[] | "- \(.commit.message | split("\n")[0]) (\(.sha[0:7]))"'
+              echo
+            fi
+            cat <<'EOF'
+          ## Install
 
           Windows: extract the zip and run eglantine.exe, or eden-cli.exe from a terminal.
-          Linux: make the AppImage executable (chmod +x) and run it; it bundles its libraries and needs glibc 2.39 or newer (Ubuntu 24.04, Fedora 40, Debian 13, Arch).
+          Linux (AppImage): make it executable (chmod +x) and run it; it bundles its libraries and needs glibc 2.39 or newer (Ubuntu 24.04, Fedora 40, Debian 13, Arch).
+          Linux (tar.gz): extract it and run ./eglantine or ./eden-cli; it uses your system libraries, so Qt 6 and the usual libraries must be installed.
           macOS: Apple Silicon and macOS 15 or newer. Extract the zip and move eglantine.app to Applications. The CLI is inside eglantine.app/Contents/MacOS/eden-cli. The app bundles Qt and MoltenVK and is ad-hoc signed, not notarized; macOS may require approval in Privacy & Security. macOS support remains experimental and uses the JIT, not NCE.
-          The -pgo builds are the same programs compiled with profile-guided optimization (clang plus Eden's profile); prefer them when your CPU supports it. The Windows PGO build is a MinGW build, so it carries its own DLLs and needs no Visual C++ redistributable."
+          The -pgo builds are the same programs compiled with profile-guided optimization (clang plus the repo's eglantine.profdata) and run on the same CPUs; if one is slower than the normal build for you, please report it. The Windows PGO build is a MinGW build, so it carries its own DLLs and needs no Visual C++ redistributable.
+
+          Eglantine looks for newer builds of its channel at startup and from Help > Check for Updates.
+          EOF
+          } > notes.md
+          gh release create "$BUILD_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            $prerelease \
+            --title "$title" \
+            --notes-file notes.md

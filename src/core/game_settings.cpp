@@ -119,12 +119,61 @@ EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer) {
     return env;
 }
 
+// A title default only where the user kept the global value; set as the per-game value, which
+// RestoreGlobalState drops again when emulation stops (the global config is never touched).
+template <typename T, bool ranged>
+static void OverrideIfGlobal(Settings::SwitchableSetting<T, ranged>& setting, T value) {
+    if (!setting.UsingGlobal()) {
+        return;
+    }
+    setting.SetGlobal(false);
+    setting.SetValue(value);
+}
+
+void LoadEarlyOverrides(std::uint64_t program_id) {
+    switch (static_cast<TitleID>(program_id)) {
+        case TitleID::MarioTennisFever:
+            // Present from the present thread: otherwise the GPU thread's back half acquires the
+            // swapchain image and presents itself, and with FIFO vsync each can block it for up to
+            // a refresh while the next frame's draws wait. The present thread's crashes (NX2_NOTES
+            // row 118) were fixed before row 138; it has been on in the Switch 2 dev config since.
+            OverrideIfGlobal(Settings::values.async_presentation, true);
+            break;
+        default:
+            break;
+    }
+}
+
 void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer) {
     const auto env = DetectEnvironment(renderer);
+    Settings::values.preemptive_cpu_reads = false;
 
     switch (static_cast<TitleID>(program_id)) {
         case TitleID::NinjaGaidenRagebound:
             Settings::values.use_squashed_iterated_blend = true;
+            break;
+        case TitleID::MarioTennisFever:
+            // Low accuracy lets the GPU thread split (30 -> 60 fps in a match); Balanced fences keep
+            // occlusion reports in the query cache, or its conditional rendering hides the characters.
+            OverrideIfGlobal(Settings::values.gpu_accuracy, Settings::GpuAccuracy::Low);
+            OverrideIfGlobal(Settings::values.gpu_fence_behavior, Settings::GpuFenceBehavior::Balanced);
+            // Reactive flushing takes read permission off every page the GPU caches, so each guest
+            // CPU read of one takes the slow path (~12% of the main core in title 1, NX2_NOTES row
+            // 115). Switch 2 titles have read traps instead (row 150), which protect only pages the
+            // GPU wrote, once each, and which only run with reactive flushing off.
+            OverrideIfGlobal(Settings::values.use_reactive_flushing, false);
+            break;
+        case TitleID::HyruleWarriorsAgeOfImprisonment:
+            // Game time follows the guest counter, which a faster CPU clock scales (Boost ran the
+            // game at 1.7x speed); low accuracy for the GPU thread split. Balanced fences signal
+            // syncpoints once the host GPU is done: earlier, the game reads GPU-written buffers
+            // right away and each read waits for the whole host GPU queue.
+            OverrideIfGlobal(Settings::values.cpu_clock, Settings::CpuClock::Normal);
+            OverrideIfGlobal(Settings::values.gpu_accuracy, Settings::GpuAccuracy::Low);
+            OverrideIfGlobal(Settings::values.gpu_fence_behavior, Settings::GpuFenceBehavior::Balanced);
+            // The game reads GPU-written buffer pages every frame; each ordered read waited for the
+            // whole host GPU queue (about 7 ms, 45 instead of 60 fps in combat).
+            Settings::values.preemptive_cpu_reads = true;
             break;
         default:
             break;

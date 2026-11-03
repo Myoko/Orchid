@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <iterator>
+#include <limits>
 #include <map>
 #include <type_traits>
 
@@ -47,6 +49,22 @@ public:
             return 0;
         }
         return ContinuousSizeInternal(new_address);
+    }
+
+    /// The entry holding `address`: its start, where the next entry starts (the end of the key
+    /// range for the last one) and its value. For every address in [start, end),
+    /// GetContinuousSizeFrom is end - address, or 0 when the value is the null value.
+    struct Segment {
+        KeyT start;
+        KeyT end;
+        ValueT value;
+    };
+    [[nodiscard]] Segment GetSegment(KeyT address) const {
+        const auto it = GetFirstElementBeforeOrOn(address);
+        const auto next = std::next(it);
+        return {it->first,
+                next == container.end() ? (std::numeric_limits<KeyT>::max)() : next->first,
+                it->second};
     }
 
     [[nodiscard]] ValueT GetValueAt(KeyT address) const {

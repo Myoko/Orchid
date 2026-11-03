@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <cstdlib>
 #include <span>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/readback_diagnostics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
+#include "video_core/renderer_vulkan/vertex_repack.h"
 
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -140,7 +142,13 @@ VkBufferView Buffer::View(u32 offset, u32 size, VideoCore::Surface::PixelFormat 
         return offset == view.offset && size == view.size && format == view.format;
     })};
     if (it != views.end()) {
-        return *it->handle;
+        // Views are made per (offset, size, format) and kept with the buffer, so a buffer bound at
+        // many offsets collects many; looked up for every texel buffer of every draw, keep the
+        // one just used at the front (the handles themselves don't move).
+        if (it != views.begin()) {
+            std::iter_swap(it, views.begin());
+        }
+        return *views.front().handle;
     }
     views.push_back({
         .offset = offset,
@@ -360,8 +368,18 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
       staging_pool{staging_pool_}, guest_descriptor_queue{guest_descriptor_queue_},
       quad_index_pass(device, scheduler, descriptor_pool, staging_pool,
                       compute_pass_descriptor_queue),
+      quad_indirect_pass(device, scheduler, descriptor_pool, staging_pool,
+                         compute_pass_descriptor_queue),
       multi_range_buffers(device_) {
     const VkDriverIdKHR driver_id = device.GetDriverID();
+    const bool enable_vertex_repack = VertexRepackEnabled();
+    LOG_INFO(Render_Vulkan, "69-byte vertex layout repacking {} ({})",
+             enable_vertex_repack ? "enabled" : "disabled",
+             "portable Vulkan layout fallback");
+    if (enable_vertex_repack) {
+        vertex_repack_pass = std::make_unique<VertexRepackPass>(
+            device, scheduler, descriptor_pool, staging_pool, compute_pass_descriptor_queue);
+    }
     limit_dynamic_storage_buffers = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
                                     driver_id == VK_DRIVER_ID_ARM_PROPRIETARY;
     if (limit_dynamic_storage_buffers) {
@@ -375,6 +393,19 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
                                                                      scheduler_, staging_pool_);
     quad_strip_index_buffer = std::make_shared<QuadStripIndexBuffer>(device_, memory_allocator_,
                                                                      scheduler_, staging_pool_);
+}
+
+u32 BufferCacheRuntime::SetVertexRepackLayout(const Tegra::Engines::Maxwell3D::Regs& regs,
+                                            bool dynamic_input) {
+    const u32 old_mask = vertex_repack_mask;
+    const bool input_supported = VertexRepackInputSupported(
+        dynamic_input, ExperimentalStaticVertexRepackEnabled());
+    vertex_repack_mask = vertex_repack_pass && input_supported ? VertexRepackMask(regs) : 0;
+    if (vertex_repack_mask != old_mask) {
+        LOG_DEBUG(Render_Vulkan, "Vertex repack selection: mask={:#x}, dynamic_input={}",
+                  vertex_repack_mask, dynamic_input);
+    }
+    return old_mask | vertex_repack_mask;
 }
 
 StagingBufferRef BufferCacheRuntime::UploadStagingBuffer(size_t size) {
@@ -467,6 +498,10 @@ bool BufferCacheRuntime::IsFree(u64 tick) {
 
 void BufferCacheRuntime::Wait(u64 tick) {
     scheduler.Wait(tick);
+}
+
+void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
+    scheduler.GetMasterSemaphore().Wait(tick);
 }
 
 void BufferCacheRuntime::Finish() {
@@ -649,7 +684,16 @@ void BufferCacheRuntime::BindIndexBuffer(PrimitiveTopology topology, IndexFormat
 }
 
 void BufferCacheRuntime::BindQuadIndexBuffer(PrimitiveTopology topology, u32 first, u32 count) {
-    if (count == 0) {
+    // The quad index buffer holds indices up to first + count, so a corrupt draw state (seen with
+    // first ~1.9 billion) would allocate gigabytes and abort on VK_ERROR_OUT_OF_DEVICE_MEMORY.
+    const bool corrupt = u64{first} + count > (u64{1} << 24);
+    if (corrupt) {
+        static bool logged = false;
+        if (!std::exchange(logged, true)) {
+            LOG_WARNING(Render_Vulkan, "Skipping quad draw with first={} count={}", first, count);
+        }
+    }
+    if (count == 0 || corrupt) {
         ReserveNullBuffer();
         scheduler.Record([this](vk::CommandBuffer cmdbuf) {
             cmdbuf.BindIndexBuffer(*null_buffer, 0, VK_INDEX_TYPE_UINT32);
@@ -666,9 +710,27 @@ void BufferCacheRuntime::BindQuadIndexBuffer(PrimitiveTopology topology, u32 fir
     }
 }
 
+void BufferCacheRuntime::BindQuadIndirect(VkBuffer src_buffer, u32 src_offset) {
+    // shortcut: an indirect quad draw stops at 2^18 vertices; raise it if a title draws more.
+    constexpr u32 max_vertices = 1U << 18;
+    quad_array_index_buffer->UpdateBuffer(max_vertices);
+    quad_indirect_args = quad_indirect_pass.Convert(src_buffer, src_offset, max_vertices);
+    quad_array_index_buffer->BindBuffer(0);
+}
+
 void BufferCacheRuntime::BindVertexBuffer(u32 index, VkBuffer buffer, u32 offset, u32 size, u32 stride) {
     if (index >= device.GetMaxVertexInputBindings()) {
         return;
+    }
+    if (buffer != VK_NULL_HANDLE && size != 0 && IsVertexRepacked(index)) {
+        const auto repacked = vertex_repack_pass->Assemble(buffer, offset, size);
+        if (!repacked) {
+            return;
+        }
+        buffer = repacked->first;
+        offset = static_cast<u32>(repacked->second);
+        size = static_cast<u32>((u64{size} + 68) / 69 * 72);
+        stride = 72;
     }
     if (device.IsExtExtendedDynamicStateSupported()) {
         scheduler.Record([index, buffer, offset, size, stride](vk::CommandBuffer cmdbuf) {
@@ -702,6 +764,24 @@ void BufferCacheRuntime::BindVertexBuffers(VideoCommon::HostBindings<Buffer>& bi
             }
         }
         buffer_handles[i] = handle;
+        const u32 binding = bindings.min_index + i;
+        if (handle != VK_NULL_HANDLE && IsVertexRepacked(binding) && bindings.strides[i] == 69 &&
+            bindings.sizes[i] > 0) {
+            const auto repacked = vertex_repack_pass->Assemble(
+                handle, static_cast<u32>(bindings.offsets[i]), static_cast<u32>(bindings.sizes[i]));
+            if (!repacked) {
+                continue;
+            }
+            buffer_handles[i] = repacked->first;
+            bindings.offsets[i] = repacked->second;
+            bindings.sizes[i] = (bindings.sizes[i] + 68) / 69 * 72;
+            bindings.strides[i] = 72;
+            static bool reported = false;
+            if (!reported) {
+                LOG_WARNING(Render_Vulkan, "Experimental GPU vertex repacking active: 69 -> 72 bytes");
+                reported = true;
+            }
+        }
     }
     const u32 device_max = device.GetMaxVertexInputBindings();
     const u32 min_binding = (std::min)(bindings.min_index, device_max);

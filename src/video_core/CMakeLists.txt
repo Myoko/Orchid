@@ -218,6 +218,9 @@ add_library(video_core STATIC
     vulkan_common/vulkan_debug_callback.h
     vulkan_common/vulkan_device.cpp
     vulkan_common/vulkan_device.h
+    vulkan_common/sparse_binding_transaction.h
+    vulkan_common/sparse_image_policy.h
+    vulkan_common/cooperative_matrix.h
     vulkan_common/vulkan_instance.cpp
     vulkan_common/vulkan_instance.h
     vulkan_common/vulkan_library.cpp
@@ -237,6 +240,7 @@ add_library(video_core STATIC
     shader_cache.h
     shader_environment.cpp
     shader_environment.h
+    shader_handle_program.h
     shader_notify.cpp
     shader_notify.h
     smaa_area_tex.h
@@ -262,6 +266,7 @@ add_library(video_core STATIC
     texture_cache/image_view_info.h
     texture_cache/render_targets.h
     texture_cache/samples_helper.h
+    texture_cache/sparse_image.h
     texture_cache/texture_cache.cpp
     texture_cache/texture_cache.h
     texture_cache/texture_cache_base.h

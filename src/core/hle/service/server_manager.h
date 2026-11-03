@@ -33,6 +33,9 @@ namespace Service {
 class Port;
 class Session;
 
+// ponytail: diagnostics only (EDEN_PKP_BT sampler). Server session -> service name, "?" if unknown.
+const char* DiagSessionServiceName(const Kernel::KServerSession* session);
+
 class ServerManager {
 public:
     explicit ServerManager(Core::System& system);

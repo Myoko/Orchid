@@ -223,6 +223,20 @@ constexpr std::array<Instruction, 8> TerminalFloatTailProgram{{
     {{0x02007950, 0xffffff80, 0x03c3ffff, 0}},
 }};
 
+// The same tail inside a called library function. A RET there can return past the NOINC, so the
+// tail proof is required; in the main program above, the library RET never returns to it.
+constexpr std::array<Instruction, 9> LibraryFloatTailProgram{{
+    {{0x00027802, 0x20, 0x00000f00, 0}},
+    {{0x00007944, 0x10, 0x03c00000, 0}},
+    {{0x0000794d, 0, 0x03800000, 0x000fec00}},
+    {{0x00000944, 0x10, 0x03c00000, 0}},
+    {{0x00007947, 0xffffffe0, 0x0383ffff, 0}},
+    {{0xff007209, 0x21, 0x07810000, 0x000fe400}},
+    {{0x01017809, 0x447a0000, 0x03810000, 0x000fe400}},
+    {{0x0000794d, 0, 0x03800000, 0x000fec00}},
+    {{0x02007950, 0xffffff80, 0x03c3ffff, 0}},
+}};
+
 TEST_CASE("Ampere terminal minmax tails allow an unrelated linked return",
           "[video_core][ampere]") {
     const auto lowered = Shader::Ampere::LowerToMaxwell(TerminalFloatTailProgram);
@@ -244,11 +258,11 @@ TEST_CASE("Ampere terminal minmax proof rejects intervening control and unknown 
              Instruction{{0x00007957, 0, 0, 0}},
              Instruction{{0x00007fff, 0, 0, 0}},
          }) {
-        auto code = TerminalFloatTailProgram;
-        code[4] = intervening;
+        auto code = LibraryFloatTailProgram;
+        code[5] = intervening;
         const auto lowered = Shader::Ampere::LowerToMaxwell(code);
         REQUIRE_FALSE(static_cast<bool>(lowered));
-        REQUIRE(lowered.error_offset == 0x20);
+        REQUIRE(lowered.error_offset == 0x30);
     }
 }
 
@@ -276,21 +290,22 @@ TEST_CASE("Ampere terminal minmax proof requires an exact unconditional exit",
 
 TEST_CASE("Ampere terminal minmax proof rejects extended instruction modes",
           "[video_core][ampere]") {
-    for (u32 instruction = 2; instruction <= 6; ++instruction) {
+    REQUIRE(static_cast<bool>(Shader::Ampere::LowerToMaxwell(LibraryFloatTailProgram)));
+    for (u32 instruction = 3; instruction <= 7; ++instruction) {
         for (u32 bit : {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 30U, 31U}) {
-            auto code = TerminalFloatTailProgram;
+            auto code = LibraryFloatTailProgram;
             code[instruction].words[3] ^= 1U << bit;
             REQUIRE_FALSE(static_cast<bool>(Shader::Ampere::LowerToMaxwell(code)));
         }
     }
-    auto predicated = TerminalFloatTailProgram;
-    predicated[4].words[0] ^= 1U << 12;
+    auto predicated = LibraryFloatTailProgram;
+    predicated[5].words[0] ^= 1U << 12;
     REQUIRE_FALSE(static_cast<bool>(Shader::Ampere::LowerToMaxwell(predicated)));
-    auto unknown_float_mode = TerminalFloatTailProgram;
-    unknown_float_mode[4].words[2] ^= 1U << 10;
+    auto unknown_float_mode = LibraryFloatTailProgram;
+    unknown_float_mode[5].words[2] ^= 1U << 10;
     REQUIRE_FALSE(static_cast<bool>(Shader::Ampere::LowerToMaxwell(unknown_float_mode)));
-    auto invalid_register_form = TerminalFloatTailProgram;
-    invalid_register_form[4].words[1] |= 1U << 8;
+    auto invalid_register_form = LibraryFloatTailProgram;
+    invalid_register_form[5].words[1] |= 1U << 8;
     REQUIRE_FALSE(static_cast<bool>(Shader::Ampere::LowerToMaxwell(invalid_register_form)));
 }
 } // namespace

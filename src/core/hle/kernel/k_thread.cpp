@@ -331,6 +331,12 @@ namespace Kernel {
     }
 
     void KThread::Finalize(KernelCore& kernel) {
+        // Drop the references to threads started before an IPC call that never came.
+        for (KThread* thread : m_pending_started_threads) {
+            thread->Close(kernel);
+        }
+        m_pending_started_threads.clear();
+
         // If the thread has an owner process, unregister it.
         if (m_parent != nullptr) {
             m_parent->UnregisterThread(kernel, this);
@@ -1332,14 +1338,19 @@ namespace Kernel {
     }
 
     void KThread::DummyThreadEndWait(KernelCore& kernel) {
+        DummyThreadMarkRunnable(kernel);
+        DummyThreadNotify();
+    }
+
+    void KThread::DummyThreadMarkRunnable(KernelCore& kernel) {
         ASSERT(KScheduler::IsSchedulerLockedByCurrentThread(kernel));
         ASSERT(this->IsDummyThread());
+        std::scoped_lock lock{m_dummy_thread_mutex};
+        m_dummy_thread_runnable = true;
+    }
 
-        // Wake up the waiting thread.
-        {
-            std::scoped_lock lock{m_dummy_thread_mutex};
-            m_dummy_thread_runnable = true;
-        }
+    void KThread::DummyThreadNotify() {
+        // The waiter rechecks m_dummy_thread_runnable, so a late or extra notify is harmless.
         m_dummy_thread_cv.notify_one();
     }
 

@@ -33,6 +33,7 @@ public:
                 if (IsValid(tmp.address)) {
                     std::scoped_lock lk(guard);
                     back_buffer.emplace_back(tmp);
+                    has_back.store(true, std::memory_order_release);
                     current.exchange(t, std::memory_order_relaxed);
                     return;
                 }
@@ -47,11 +48,24 @@ public:
                                                 std::memory_order_relaxed));
     }
 
+    /// Whether a CPU write was collected since the last Gather (without the lock).
+    [[nodiscard]] bool HasPending() const {
+        return has_back.load(std::memory_order_acquire) ||
+               current.load(std::memory_order_acquire).mask != 0;
+    }
+
     void Gather(std::function<void(PAddr, size_t)>& callback) {
+        // Called for every GPU fence (thousands a second for Switch 2 titles), for each core,
+        // while the CPU rarely writes GPU-cached memory: nothing collected, no lock.
+        if (!has_back.load(std::memory_order_acquire) &&
+            current.load(std::memory_order_acquire).mask == 0) {
+            return;
+        }
         {
             std::scoped_lock lk(guard);
             TransformAddress t = current.exchange(default_transform, std::memory_order_relaxed);
             front_buffer.swap(back_buffer);
+            has_back.store(false, std::memory_order_relaxed);
             if (IsValid(t.address)) {
                 front_buffer.emplace_back(t);
             }
@@ -114,6 +128,7 @@ private:
     }
 
     std::atomic<TransformAddress> current{};
+    std::atomic<bool> has_back{}; ///< back_buffer holds entries (set and cleared under guard)
     std::mutex guard;
     std::vector<TransformAddress> back_buffer;
     std::vector<TransformAddress> front_buffer;

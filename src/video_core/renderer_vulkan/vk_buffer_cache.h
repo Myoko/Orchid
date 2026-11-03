@@ -112,11 +112,20 @@ public:
 
     void TickFrame(Common::SlotVector<Buffer>& slot_buffers) noexcept;
 
+    u32 SetVertexRepackLayout(const Tegra::Engines::Maxwell3D::Regs& regs, bool dynamic_input);
+
+    bool IsVertexRepacked(u32 binding) const {
+        return (vertex_repack_mask & (1U << binding)) != 0;
+    }
+
     u64 CurrentTick();
 
     bool IsFree(u64 tick);
 
     void Wait(u64 tick);
+
+    /// Waits for a submitted tick without flushing: safe on threads other than the GPU thread.
+    void WaitSubmittedTick(u64 tick);
 
     void Finish();
 
@@ -152,6 +161,14 @@ public:
                          u32 base_vertex, VkBuffer buffer, u32 offset, u32 size);
 
     void BindQuadIndexBuffer(PrimitiveTopology topology, u32 first, u32 count);
+
+    /// A non-indexed indirect quad draw: binds the quad index buffer and converts the arguments
+    /// at src into indexed ones, returned by QuadIndirectArgs.
+    void BindQuadIndirect(VkBuffer src_buffer, u32 src_offset);
+
+    [[nodiscard]] std::pair<VkBuffer, VkDeviceSize> QuadIndirectArgs() const {
+        return quad_indirect_args;
+    }
 
     void BindVertexBuffer(u32 index, VkBuffer buffer, u32 offset, u32 size, u32 stride);
 
@@ -224,6 +241,10 @@ public:
 
     void BindTextureBuffer(Buffer& buffer, u32 offset, u32 size,
                            VideoCore::Surface::PixelFormat format) {
+        // An unmapped texture buffer has no format; its view is the null buffer's anyway.
+        if (format == VideoCore::Surface::PixelFormat::Invalid) {
+            format = VideoCore::Surface::PixelFormat::R8_UNORM;
+        }
         if (guest_descriptor_queue.UsesDescriptorBuffer()) {
             const VkDeviceAddress address = buffer.DeviceAddress();
             const VkFormat vk_format = address == 0 ? VK_FORMAT_UNDEFINED : TexelBufferFormat(format);
@@ -268,7 +289,11 @@ private:
     vk::Buffer null_buffer;
 
     std::unique_ptr<Uint8Pass> uint8_pass;
+    std::unique_ptr<VertexRepackPass> vertex_repack_pass;
+    u32 vertex_repack_mask{};
     QuadIndexedPass quad_index_pass;
+    QuadIndirectPass quad_indirect_pass;
+    std::pair<VkBuffer, VkDeviceSize> quad_indirect_args{};
 
     MultiRangeBufferCache multi_range_buffers;
     boost::container::small_vector<MultiRangeSource, 16> multi_range_sources;

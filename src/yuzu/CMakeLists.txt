@@ -219,6 +219,7 @@ add_executable(yuzu
     yuzu.qrc
     yuzu.rc
     migration_dialog.h migration_dialog.cpp
+    nup_dialogs.h nup_dialogs.cpp
     migration_worker.h migration_worker.cpp
     libqt_common.h libqt_common.cpp
 
@@ -380,7 +381,7 @@ if (APPLE)
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED ON)
     # Otherwise, we'll use our own.
     else()
-        set(_icons "${_dist}/eden.icns" "${_dist}/Assets.car")
+        set(_icons "${_dist}/eglantine.icns" "${_dist}/Assets.car")
     endif()
 
     set_source_files_properties(${_icons} "${_dist}/nx2_switches.txt" PROPERTIES

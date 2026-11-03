@@ -100,6 +100,8 @@ public:
     void FlushAll() override;
     void FlushRegion(DAddr addr, u64 size,
                      VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
+    GpuWrittenList ReadGpuWrittenCommandList(DAddr addr, std::span<u8> out) override;
+    void NoteGpuWrittenCommandListSynced(DAddr page) override;
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override;
@@ -130,6 +132,11 @@ public:
     bool AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surface& src,
                                const Tegra::Engines::Fermi2D::Surface& dst,
                                const Tegra::Engines::Fermi2D::Config& copy_config) override;
+    bool AccelerateTemporalUpscale(const Tegra::Engines::Fermi2D::Surface& src,
+                                   const Tegra::Engines::Fermi2D::Surface& dst,
+                                   const Tegra::Engines::Fermi2D::Surface& motion_vectors,
+                                   std::array<f32, 2> jitter,
+                                   std::array<f32, 2> motion_scale) override;
     Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() override;
     void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
                                   std::span<const u8> memory) override;
@@ -161,6 +168,10 @@ private:
     void PrepareDraw(bool is_indexed, Func&&);
 
     void FlushWork();
+
+    /// Records the copies of the command list pages the work just recorded wrote and submits, so
+    /// the GPU makes them now (BufferCache::Nx2CopyListPages).
+    void SubmitNx2ListCopies();
 
     void UpdateDynamicStates();
 
@@ -199,6 +210,12 @@ private:
 
     void UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs);
 
+    /// The pipeline the dynamic states are set for: the one PrepareDraw bound, or (outside a
+    /// draw, e.g. DrawTexture) a fresh lookup.
+    GraphicsPipeline* DynamicStatePipeline() {
+        return draw_pipeline != nullptr ? draw_pipeline : pipeline_cache.CurrentGraphicsPipeline();
+    }
+
     Tegra::GPU& gpu;
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 
@@ -226,12 +243,16 @@ private:
     FenceManager fence_manager;
 
     vk::Event wfi_event;
+    u64 wfi_record_count = ~u64{}; ///< Scheduler::RecordCount() after the last wait for idle
 
     boost::container::static_vector<u32, MAX_IMAGE_VIEWS> image_view_indices;
     std::array<VideoCommon::ImageViewId, MAX_IMAGE_VIEWS> image_view_ids;
     boost::container::static_vector<VkSampler, MAX_TEXTURES> sampler_handles;
 
     u32 draw_counter = 0;
+    /// Set by PrepareDraw while it configures a draw (DynamicStatePipeline).
+    GraphicsPipeline* draw_pipeline = nullptr;
+    bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
 };
 
 } // namespace Vulkan

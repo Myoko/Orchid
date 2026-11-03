@@ -59,6 +59,35 @@ void DrainBack() {
     VideoCommon::GpuSplit::Get().Drain();
 }
 
+// Whether a Switch 2 greater-or-equal acquire is met by the word as guest memory holds it now, or
+// by a release the back already ran whose write only waits for the host GPU (delayed fences),
+// before the split's back catches up. Most are (counters other queues have passed), and draining
+// for each made the front wait for all queued work thousands of times a second. These counters
+// only grow, so work still queued (this channel's own releases included) can't unmeet them.
+// Equal and mask acquires wait for the back as before: a release still queued on this channel
+// may change the word first (e.g. close a gate before waiting for it to open again).
+// EDEN_NX2_ACQUIRE_PEEK=0 turns this off.
+bool MetBeforeDrain(DmaPusher& dma_pusher, GPUVAddr address, u32 operation, u32 value) {
+    static const bool enabled = [] {
+        const char* env = std::getenv("EDEN_NX2_ACQUIRE_PEEK");
+        return env == nullptr || env[0] != '0';
+    }();
+    // Puller::GpuSemaphoreOperation values.
+    if (!enabled || operation != Nx2SemaphoreWaiters::AcquireGequal ||
+        !VideoCommon::GpuSplit::Get().Active()) {
+        return false;
+    }
+    if (dma_pusher.memory_manager.Read<u32>(address) >= value) {
+        return true;
+    }
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
+    if (!device) {
+        return false;
+    }
+    const auto pending = dma_pusher.rasterizer->PendingSemaphoreRelease(*device);
+    return pending && *pending >= value;
+}
+
 } // Anonymous namespace
 
 bool Puller::PendingAcquire::Matches(u32 current) const {
@@ -76,6 +105,10 @@ bool Puller::PendingAcquire::Matches(u32 current) const {
 
 bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (!pending_acquire) {
+        return true;
+    }
+    if (MetBeforeDrain(dma_pusher, pending_acquire->address, pending_acquire->operation,
+                       pending_acquire->value)) {
         return true;
     }
     // The release may still be queued for the split GPU thread's back half (and the caches
@@ -245,9 +278,21 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
+        if (MetBeforeDrain(dma_pusher, acquire.address, acquire.operation, acquire.value)) {
+            return;
+        }
         DrainBack();
         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             return;
+        }
+        // A release the back already ran whose write only waits for the host GPU (delayed fences:
+        // Balanced/Accurate, Mario Tennis Fever's default) meets it as CanResumeAcquire would: go
+        // on instead of suspending the channel and reading the whole entry again on resume.
+        if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
+            if (const auto pending = dma_pusher.rasterizer->PendingSemaphoreRelease(*device);
+                pending && acquire.Matches(*pending)) {
+                return;
+            }
         }
         // Registered before the fences run, so a release among them that meets the value counts
         // even if a later one overwrites it.

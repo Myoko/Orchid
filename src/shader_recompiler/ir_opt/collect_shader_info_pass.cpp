@@ -492,6 +492,10 @@ void VisitUsages(Info& info, IR::Inst& inst) {
     case IR::Opcode::LaneId:
         info.uses_subgroup_invocation_id = true;
         break;
+    case IR::Opcode::TensorMulAdd:
+        info.uses_tensor_mul_add = true;
+        info.uses_subgroup_invocation_id = true;
+        break;
     case IR::Opcode::ShuffleIndex:
     case IR::Opcode::ShuffleUp:
     case IR::Opcode::ShuffleDown:
@@ -963,10 +967,12 @@ void CollectShaderInfoPass(Environment& env, IR::Program& program) {
         switch (program.stage) {
         case Stage::VertexA:
         case Stage::VertexB:
+        case Stage::Task: // bound in the vertex slot
             return 0x110u;
         case Stage::TessellationControl:
             return 0x210u;
         case Stage::TessellationEval:
+        case Stage::Mesh: // bound in the tessellation slot
             return 0x310u;
         case Stage::Geometry:
             return 0x410u;
@@ -978,6 +984,11 @@ void CollectShaderInfoPass(Environment& env, IR::Program& program) {
         throw InvalidArgument("Invalid stage {}", program.stage);
     }()};
     info.nvn_buffer_base = base;
+    if (program.stage == Stage::Task || program.stage == Stage::Mesh) {
+        // The stage buffer reads the workgroup index; the epilogue splits work by invocation.
+        info.uses_workgroup_id = true;
+        info.uses_local_invocation_id = true;
+    }
 
     for (IR::Block* const block : program.post_order_blocks) {
         for (IR::Inst& inst : block->Instructions()) {

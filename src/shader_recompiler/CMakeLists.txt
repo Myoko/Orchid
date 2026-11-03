@@ -24,7 +24,9 @@ add_library(shader_recompiler STATIC
     backend/spirv/emit_spirv_memory.cpp
     backend/spirv/emit_spirv_select.cpp
     backend/spirv/emit_spirv_shared_memory.cpp
+    backend/spirv/emit_spirv_mesh.cpp
     backend/spirv/emit_spirv_special.cpp
+    backend/spirv/emit_spirv_tensor.cpp
     backend/spirv/emit_spirv_undefined.cpp
     backend/spirv/emit_spirv_warp.cpp
     backend/spirv/spirv_emit_context.cpp
@@ -166,6 +168,7 @@ add_library(shader_recompiler STATIC
     frontend/maxwell/translate/impl/video_set_predicate.cpp
     frontend/maxwell/translate/impl/vote.cpp
     frontend/maxwell/translate/impl/warp_shuffle.cpp
+    frontend/maxwell/translate/impl/tensor_mul_add.cpp
     frontend/maxwell/translate/translate.cpp
     frontend/maxwell/translate/translate.h
     frontend/maxwell/translate_program.cpp

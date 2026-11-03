@@ -29,7 +29,7 @@ TEST_CASE("Ampere reciprocal accepts the captured uniform source form", "[video_
     const auto predicated = LowerToMaxwell(code);
     REQUIRE(static_cast<bool>(predicated));
     REQUIRE(((predicated.instructions.front() >> 16) & 15) == 1);
-    for (const u32 source : {28U, 62U, 64U, 0x80000008U}) {
+    for (const u32 source : {64U, 0x80000008U}) { // UR28-UR62 map to R180-R214
         auto invalid = code;
         invalid[0].words[1] = source;
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
@@ -44,14 +44,18 @@ TEST_CASE("Ampere reciprocal accepts the captured uniform source form", "[video_
     REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(alias)));
 }
 
-TEST_CASE("Ampere clip-state operations remain explicitly unsupported", "[video_core][ampere]") {
+TEST_CASE("Ampere clip-state updates lower to nothing, other forms stay unsupported", "[video_core][ampere]") {
     const std::array<Instruction, 2> code{{
         {{0x0000780d, 0xc4321111, 0x03fe0000, 0x000fc800}},
         {{0x0000794d, 0, 0x03800000, 0}},
     }};
+    // The accumulator is never tracked: the update emits nothing before the EXIT.
     const auto lowered = LowerToMaxwell(code);
-    REQUIRE_FALSE(static_cast<bool>(lowered));
-    REQUIRE(lowered.instructions.empty());
+    REQUIRE(static_cast<bool>(lowered));
+    REQUIRE(lowered.instructions.size() == 1);
+    auto other = code;
+    other[0].words[1] = 0xc4321110;
+    REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(other)));
 }
 
 TEST_CASE("Ampere floating comparisons accept uniform sources without losing FTZ",
@@ -66,7 +70,7 @@ TEST_CASE("Ampere floating comparisons accept uniform sources without losing FTZ
             (0x5bb0000000070000ULL | 7ULL | (255ULL << 8) | (220ULL << 20) | (7ULL << 39) |
              (1ULL << 47) | (12ULL << 48)));
     auto invalid = code;
-    invalid[0].words[1] = 28;
+    invalid[0].words[1] = 64; // UR28-UR62 map to R180-R214
     REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
     auto alias = code;
     alias[0].words[0] = 0xdc007c0b;
@@ -157,7 +161,7 @@ TEST_CASE("Ampere warp reductions reject unsupported modes and uniform destinati
         }};
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(code)));
     }
-    for (const u32 destination : {28U, 63U}) {
+    for (const u32 destination : {63U}) { // UR28-UR62 map to R180-R214
         const std::array<Instruction, 2> code{{
             {{0x030073c4U | (destination << 16), 0, 0x4000, 0x000ea200}},
             {{0x0000794d, 0, 0x03800000, 0}},

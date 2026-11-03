@@ -240,6 +240,18 @@ public:
         return m_tls_address;
     }
 
+    // ponytail: diagnostics only (EDEN_PKP_BT sampler). Last SVC id + first 4 args, set by svc::Call.
+    void SetLastSvc(u32 id, const std::array<u64, 8>& args) {
+        m_last_svc = id;
+        m_last_svc_args = {args[0], args[1], args[2], args[3]};
+    }
+    u32 GetLastSvc() const {
+        return m_last_svc;
+    }
+    const std::array<u64, 4>& GetLastSvcArgs() const {
+        return m_last_svc_args;
+    }
+
     /*
      * Returns the value of the TPIDR_EL0 Read/Write system register for this thread.
      * @returns The value of the TPIDR_EL0 register.
@@ -357,6 +369,13 @@ public:
 
     s64 GetYieldScheduleCount() const {
         return m_schedule_count;
+    }
+
+    // Threads this thread started on its own core at a lower priority (see SendSyncRequestImpl in
+    // svc_ipc.cpp). Only touched by the owning thread itself (and Finalize); each entry holds a
+    // reference.
+    std::vector<KThread*>& GetPendingStartedThreads() {
+        return m_pending_started_threads;
     }
 
     void SetYieldScheduleCount(s64 count) {
@@ -655,6 +674,9 @@ public:
     void RequestDummyThreadWait(KernelCore& kernel);
     void DummyThreadBeginWait(KernelCore& kernel);
     void DummyThreadEndWait(KernelCore& kernel);
+    /// DummyThreadEndWait in two steps: mark runnable under the scheduler lock, notify after it.
+    void DummyThreadMarkRunnable(KernelCore& kernel);
+    void DummyThreadNotify();
 
     uintptr_t GetArgument() const {
         return m_argument;
@@ -885,10 +907,13 @@ private:
     KVirtualAddress m_kernel_stack_top{};
     u32* m_light_ipc_data{};
     KProcessAddress m_tls_address{};
+    u32 m_last_svc{};                       // ponytail: diagnostics only
+    std::array<u64, 4> m_last_svc_args{};  // ponytail: diagnostics only
     KLightLock m_activity_pause_lock;
     SyncObjectBuffer m_sync_object_buffer{};
     s64 m_schedule_count{};
     s64 m_last_scheduled_tick{};
+    std::vector<KThread*> m_pending_started_threads;
     std::array<QueueEntry, Core::Hardware::NUM_CPU_CORES> m_per_core_priority_queue_entry{};
     KThreadQueue* m_wait_queue{};
     LockWithPriorityInheritanceInfoList m_held_lock_info_list{};

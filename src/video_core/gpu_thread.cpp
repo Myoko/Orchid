@@ -114,10 +114,14 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     if (std::chrono::steady_clock::now() - last_progress <
                         std::chrono::microseconds{500}) {
                         std::this_thread::yield();
-                    } else {
-                        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                        continue;
                     }
-                    continue;
+                    // Then sleep until the CPU submits more work, polling the semaphores every
+                    // quarter millisecond (a release is a plain guest memory write that wakes
+                    // nothing). A fixed 1 ms sleep let new submissions wait out the rest of it.
+                    if (!state.queue.PopWaitFor(next, std::chrono::microseconds{250})) {
+                        continue;
+                    }
                 }
             } else {
                 Profile::Scope scope{Profile::Zone::Idle};

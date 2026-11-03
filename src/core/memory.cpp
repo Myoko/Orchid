@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <thread>
 #include <type_traits>
@@ -624,6 +625,18 @@ struct Memory::Impl {
         protect_run();
     }
 
+    /// Whether a page of [vaddr, vaddr + size) has a read trap armed.
+    bool AnyReadTrapArmed(u64 vaddr, size_t size) {
+        // Always under the lock (no Empty() shortcut): arming opens a new generation before it
+        // counts the page, so a reader that already sees the new generation could see no traps,
+        // remember the page as clean at that generation and later disarm the trap unflushed.
+        std::scoped_lock lk{read_trap_mutex};
+        bool armed = false;
+        read_traps.ForEach(vaddr >> YUZU_PAGEBITS, ((vaddr + size - 1) >> YUZU_PAGEBITS) + 1,
+                           [&](u64) { armed = true; });
+        return armed;
+    }
+
     /// A slow-path read of a cached page has been flushed: traps armed up to flushed_generation
     /// have done their job. Later ones belong to GPU writes the flush may have missed.
     void DisarmReadTraps(u64 vaddr, size_t size, u64 flushed_generation) {
@@ -896,12 +909,35 @@ struct Memory::Impl {
             current_area = {};
             read_area_generations[core] = generation;
         }
+        // With read traps, a fastmem load of a cached page that has no trap armed reads guest
+        // memory as it is. Loads that once hit a trap are recompiled to come here for good
+        // (dynarmic's recompile on fastmem failure): give them the same answer instead of a
+        // read through the GPU thread, which waits for everything queued before it. A trap armed
+        // later opens a new generation, which resets the area below.
+        std::optional<bool> unarmed;
+        const auto is_unarmed = [&] {
+            if (!unarmed) {
+                // Switch 2 titles only: the traps are armed by their buffer cache.
+                unarmed = Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
+                          ReadTrapsEnabled() && !AnyReadTrapArmed(v_address, size);
+            }
+            return *unarmed;
+        };
         gpu_device_memory.ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
             diagnostics.AddAlias();
             const DAddr end_address = address + size;
             if (current_area.start_address <= address && end_address <= current_area.end_address)
                 [[likely]] {
                 diagnostics.Add(Event::AreaHit);
+                return;
+            }
+            if (is_unarmed()) {
+                // Nothing to flush on this page until a trap is armed (new generation).
+                current_area = {
+                    .start_address = Common::AlignDown(address, YUZU_PAGESIZE),
+                    .end_address = Common::AlignUp(end_address, YUZU_PAGESIZE),
+                    .preemtive = false,
+                };
                 return;
             }
             diagnostics.Add(Event::AreaMiss);
@@ -989,6 +1025,9 @@ struct Memory::Impl {
                 }
             }
         });
+        if (unarmed.value_or(false)) {
+            return; // No trap in range: nothing to disarm.
+        }
         // Only once every device alias is flushed (or inside an area flushed after this
         // generation's traps were armed): a disarmed page is read through fastmem without trapping.
         DisarmReadTraps(v_address, size, generation);

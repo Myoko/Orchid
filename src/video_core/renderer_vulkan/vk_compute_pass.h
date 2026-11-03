@@ -56,6 +56,20 @@ private:
     vk::ShaderModule module;
 };
 
+class VertexRepackPass final : public ComputePass {
+public:
+    VertexRepackPass(const Device& device, Scheduler& scheduler, DescriptorPool& descriptor_pool,
+                     StagingBufferPool& staging_pool, ComputePassDescriptorQueue& descriptor_queue);
+    /// Returns nothing when the range exceeds the device limits; the binding is then left as is.
+    std::optional<std::pair<VkBuffer, VkDeviceSize>> Assemble(VkBuffer source, u32 offset,
+                                                              u32 size);
+
+private:
+    Scheduler& scheduler;
+    StagingBufferPool& staging_pool;
+    ComputePassDescriptorQueue& descriptor_queue;
+};
+
 class Uint8Pass final : public ComputePass {
 public:
     explicit Uint8Pass(const Device& device_, Scheduler& scheduler_,
@@ -85,6 +99,24 @@ public:
     std::pair<VkBuffer, VkDeviceSize> Assemble(
         Tegra::Engines::Maxwell3D::Regs::IndexFormat index_format, u32 num_vertices,
         u32 base_vertex, VkBuffer src_buffer, u32 src_offset, bool is_strip);
+
+private:
+    Scheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
+};
+
+class QuadIndirectPass final : public ComputePass {
+public:
+    explicit QuadIndirectPass(const Device& device_, Scheduler& scheduler_,
+                              DescriptorPool& descriptor_pool_,
+                              StagingBufferPool& staging_buffer_pool_,
+                              ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+
+    /// Turns the non-indexed indirect quad draw at src into indexed draw arguments for the quad
+    /// index buffer, with at most max_vertices vertices. Returns where the arguments are.
+    std::pair<VkBuffer, VkDeviceSize> Convert(VkBuffer src_buffer, u32 src_offset,
+                                              u32 max_vertices);
 
 private:
     Scheduler& scheduler;

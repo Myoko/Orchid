@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,7 @@
 
 #include "common/common_types.h"
 #include "common/scope_exit.h"
+#include "common/logging.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "video_core/delayed_destruction_ring.h"
@@ -86,7 +88,14 @@ public:
             TryReleasePendingFences<false>();
         }
         auto [should_flush, committed_flushes] = CommitCacheFlushes();
-        if (!delay_fence && committed_flushes == 0 && SkipEmptyFence()) {
+        // Delayed fences (Balanced/Accurate, e.g. Mario Tennis Fever's default) run their callback
+        // only after every earlier fence's operations. With nothing to download and no earlier
+        // fence still being released, such a fence would be stubbed and run the callback at once
+        // on the fencing thread anyway: run it here instead, in the same order, without making
+        // a fence object, taking the fencing lock and waking that thread for every compute
+        // release (thousands a second for Switch 2 titles).
+        const bool can_skip = !delay_fence || (!should_flush && NoFenceInFlight());
+        if (can_skip && committed_flushes == 0 && SkipEmptyFence()) {
             Nx2Profile::Scope skipped_scope{Nx2Profile::Zone::FenceSkipped};
             gpu.BeginAsyncGuestWrite();
             SCOPE_EXIT { gpu.EndAsyncGuestWrite(); };
@@ -110,6 +119,7 @@ public:
             uncommitted_operations.clear(); // moved-from: make it empty explicitly
         }
         pending_flushes.push_back(committed_flushes);
+        fences_in_flight.fetch_add(1, std::memory_order_relaxed);
         QueueFence(new_fence);
         if (!delay_fence) {
             gpu.BeginAsyncGuestWrite();
@@ -128,6 +138,13 @@ public:
     }
 
     void SignalSyncPoint(u32 value) {
+        // The id comes from a command list (the 3D engine's sync method, the puller's fence
+        // action). Past the syncpoint table, the increment would walk memory after it as an
+        // action list; command words read wrong carry any id (Splatoon Raiders on Linux).
+        if (value >= Tegra::Host1x::SyncpointManager::NUM_MAX_SYNCPOINTS) {
+            LOG_ERROR(HW_GPU, "Signal of syncpoint {} past the table, ignored", value);
+            return;
+        }
         syncpoint_manager.IncrementGuest(value);
         std::function<void()> func([this, value] { syncpoint_manager.IncrementHost(value); });
         SignalFence(std::move(func));
@@ -213,12 +230,18 @@ private:
             for (auto& operation : operations) {
                 operation();
             }
+            fences_in_flight.fetch_sub(1, std::memory_order_release);
             {
                 std::unique_lock lock(ring_guard);
                 delayed_destruction_ring.Push(std::move(current_fence));
             }
             fences.pop();
         }
+    }
+
+    /// Whether every fence made so far has been released, its operations included.
+    bool NoFenceInFlight() const {
+        return fences_in_flight.load(std::memory_order_acquire) == 0;
     }
 
     void ReleaseThreadFunc(std::stop_token stop_token) {
@@ -295,6 +318,9 @@ private:
                     operation();
                 }
             }
+            // Only now are these fences done: their operations ran (SignalFence's fast path for
+            // delayed fences must not overtake them).
+            fences_in_flight.fetch_sub(batch.size(), std::memory_order_release);
             {
                 std::unique_lock lock(ring_guard);
                 for (Released& released : batch) {
@@ -387,6 +413,8 @@ private:
     std::deque<std::deque<std::function<void()>>> pending_operations;
     std::deque<u8> pending_flushes; ///< Per fence: the caches that committed downloads
     u32 skipped_fences{}; ///< Empty fences skipped since the last one made (GPU thread only)
+    /// Fences queued whose operations have not run yet (NoFenceInFlight).
+    std::atomic<size_t> fences_in_flight{};
 
     std::mutex guard;
     std::mutex ring_guard;
