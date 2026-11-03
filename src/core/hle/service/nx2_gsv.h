@@ -1302,7 +1302,10 @@ inline Nx2ImageLayout Nx2CalculateImageLayout(const u32* preference) {
 // GameChat's graphics side (nn::chat::gsv), handed out by gsv 1202. Read from the SDK's
 // nn::chat::gsv::Initialize: TIPC 1() returns a u32 id at word 3 (it aborts with 2162-0001 if
 // the id is over 0x3ff), then TIPC 11(u32 id) returns an event (copy handle at word 3, result at
-// word 4) that it attaches as a system event. Everything else falls through to the nx2 auto stub.
+// word 4) that it attaches as a system event. 103 (OpenVirtualDisplay: u64 name packed from up to
+// 8 chars, u32 slot id) and 121 (CreateMetadataPool: u64 pool cookie, u64 count, u32 slot id) only
+// read the result; the SDK picks the slot id itself. Everything else falls through to the nx2
+// auto stub.
 class INx2ChatGsvSession final : public ServiceFramework<INx2ChatGsvSession> {
 public:
     explicit INx2ChatGsvSession(Core::System& system_)
@@ -1310,6 +1313,8 @@ public:
         RegisterHandlersTipc({
             {1, &INx2ChatGsvSession::GetEventId, "GetEventId (guessed)"},
             {11, &INx2ChatGsvSession::GetEvent, "GetEvent (guessed)"},
+            {103, &INx2ChatGsvSession::Succeed, "OpenVirtualDisplay"},
+            {121, &INx2ChatGsvSession::Succeed, "CreateMetadataPool"},
         });
     }
 
@@ -1337,36 +1342,77 @@ private:
         rb.PushCopyObjects(ctx, event->GetReadableEvent());
     }
 
+    void Succeed(HLERequestContext& ctx) {
+        const auto* w = ctx.CommandBuffer();
+        LOG_DEBUG(Service, "nx2:chat:gsv TIPC {} [2]={:#x} [3]={:#x} [4]={:#x}", ctx.GetCommand(), w[2],
+                  w[3], w[4]);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
     KernelHelpers::ServiceContext m_context;
     std::map<u32, Kernel::KEvent*> m_events;
 };
 
-// nn::camera::sdk camera context (gsv 602). GameChat builds its local camera video storage from it
-// and polls it every frame. Nothing about the commands is known beyond the arguments seen (3 and
-// 21 take the camera name "Default", 29 a u32 0x180 = 384, the width of the 384x216 camera images),
-// and the game runs on an empty success, so they answer that without a log line per call.
+// nn::camera::sdk camera context (gsv 602). The titles' statically linked camera client talks CMIF
+// on it (not TIPC). Layouts read from that client in Welcome Tour and Mario Kart World:
+//  3(char name[16]) -> u64 camera id. Opens "Default"; the client tolerates result 2452-0006 here.
+//  21(u64 camera id) -> copy handle, attached as the camera's system event.
+//  29(40-byte image preference, u64 camera id) -> result only. Mario Kart World asks it for four
+//     preferences (first word 0x180 = 384, the 384x216 images) every frame and tolerates
+//     2452-0003, 2452-0006 and 2452-0007.
+// ponytail: which of those results hardware gives without the camera accessory is not known, so
+// this keeps the answers the titles already ran on (success, id 0) and adds the event that 21
+// lacked; the event is never signalled.
 class INx2CameraSession final : public ServiceFramework<INx2CameraSession> {
 public:
-    explicit INx2CameraSession(Core::System& system_) : ServiceFramework{system_, "nx2:camera"} {
-        RegisterHandlersTipc({
-            {3, &INx2CameraSession::Stub, "Unknown3 (camera name \"Default\")"},
-            {21, &INx2CameraSession::Stub, "Unknown21 (camera name \"Default\")"},
-            {29, &INx2CameraSession::Stub, "Unknown29 (u32 0x180, polled every frame)"},
+    explicit INx2CameraSession(Core::System& system_)
+        : ServiceFramework{system_, "nx2:camera"}, m_context{system_, "nx2:camera"} {
+        RegisterHandlers({
+            {3, &INx2CameraSession::OpenCamera, "OpenCamera"},
+            {21, &INx2CameraSession::GetCameraEvent, "GetCameraEvent"},
+            {29, &INx2CameraSession::CheckImagePreference, "CheckImagePreference"},
         });
+        m_event = m_context.CreateEvent("nx2:camera:Event");
+    }
+
+    ~INx2CameraSession() override {
+        m_context.CloseEvent(m_event);
     }
 
 private:
-    void Stub(HLERequestContext& ctx) {
-        const u32 command = ctx.GetCommand();
-        if (m_logged.insert(command).second) {
-            LOG_WARNING(Service, "(STUBBED) nx2:camera TIPC {} [2]={:#x} [3]={:#x}, returning success",
-                        command, ctx.CommandBuffer()[2], ctx.CommandBuffer()[3]);
+    void OpenCamera(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto name = rp.PopRaw<std::array<char, 16>>();
+        LOG_WARNING(Service, "(STUBBED) nx2:camera 3 name={}, returning camera id 0",
+                    std::string_view{name.data(), strnlen(name.data(), name.size())});
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<u64>(0);
+    }
+
+    void GetCameraEvent(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        LOG_WARNING(Service, "(STUBBED) nx2:camera 21 id={}, returning an event", rp.Pop<u64>());
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, m_event->GetReadableEvent());
+    }
+
+    // Polled every frame by Mario Kart World, so it is logged once.
+    void CheckImagePreference(HLERequestContext& ctx) {
+        if (!m_logged_29) {
+            m_logged_29 = true;
+            LOG_WARNING(Service, "(STUBBED) nx2:camera 29 [8]={:#x}, returning success",
+                        ctx.CommandBuffer()[8]);
         }
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
     }
 
-    std::set<u32> m_logged;
+    KernelHelpers::ServiceContext m_context;
+    Kernel::KEvent* m_event;
+    bool m_logged_29 = false;
 };
 
 // Placeholder for the Switch 2 display session (nn::vi2::sdk), handed out by gsv 305. Reply
@@ -2240,6 +2286,7 @@ private:
         u32 height;
         u64 pts;
         bool end;
+        bool after_end; // no frame: an image released after the end of the stream, handed back
     };
     struct Fence {
         u32 syncpoint;
@@ -2345,21 +2392,26 @@ private:
         u32 value;
         {
             std::scoped_lock lk{m_mutex};
-            m_free.push_back(image);
-            if (release_fence) {
-                m_release_fences[image] = *release_fence;
-            }
-            // After the end of a stream nothing fills an image again, so a release completes at
-            // once: its fence is the syncpoint's current value. Mario Kart World releases its
-            // images after a movie ends and waits for the returned fences; a fence for a frame
-            // that never comes hung the game on a black screen after its title movie.
+            // After the end of a stream nothing fills a released image, so it comes straight back
+            // as an empty end-of-stream frame: its fence is the syncpoint's current value and 213
+            // has a frame for it. Mario Kart World releases its images after a movie ends and
+            // waits for the returned fences (a fence for a frame that never comes hung it on a
+            // black screen after its title movie). Hyrule Warriors' movie player re-acquires each
+            // image it releases, waits that fence and asks 213 for the image's frame; an empty
+            // reply (0x1c286f) froze the game on a movie's last frame. The image stays out of
+            // m_free and uncounted, so later frames (the player keeps submitting empty
+            // end-of-stream inputs) still fill images in the order their fences count.
             if (release_fence && m_stream_ended && m_inputs.empty() && m_decoded.empty()) {
-                const u32 reached = static_cast<u32>(
+                value = static_cast<u32>(
                     system.Host1x().GetSyncpointManager().GetGuestSyncpointValue(m_syncpoint));
-                m_sync_base = reached;
-                m_handed = 0;
-                value = reached;
+                m_outputs.push_back({image, m_out_width, m_out_height, 0, true, true});
+                LOG_DEBUG(Service, "{} image {} released after the end of stream, handed back",
+                          GetServiceName(), image);
             } else {
+                m_free.push_back(image);
+                if (release_fence) {
+                    m_release_fences[image] = *release_fence;
+                }
                 value = m_sync_base + ++m_handed;
             }
         }
@@ -2422,6 +2474,8 @@ private:
         {
             std::scoped_lock lk{m_mutex};
             m_inputs.clear();
+            // Images handed back after the end of the stream hold no frame for what follows.
+            std::erase_if(m_outputs, [](const Output& output) { return output.after_end; });
             m_flush = true;
             m_stream_ended = false;
             m_ready->room.store(true, std::memory_order_relaxed);
@@ -2498,7 +2552,9 @@ private:
                     WriteImage(decoder.get(), image, frame, bytes, tiled_bytes);
                 lk.lock();
                 // Even an image written during a flush counts: the client waits for its value.
-                m_outputs.push_back({image, width, height, frame.pts, frame.end});
+                m_outputs.push_back({image, width, height, frame.pts, frame.end, false});
+                m_out_width = width;
+                m_out_height = height;
                 if (frame.end) {
                     m_stream_ended = true;
                 }
@@ -2669,6 +2725,8 @@ private:
     std::vector<u8> m_configuration;
     u32 m_width{};
     u32 m_height{};
+    u32 m_out_width{};  ///< Size of the last frame written
+    u32 m_out_height{};
     u32 m_handed{}; ///< Output images handed out (registered or released) so far
     u64 m_frames_out{};
     std::deque<Input> m_inputs;
@@ -2716,6 +2774,9 @@ public:
             {991, &INx2GraphicsSystemSession::CalculateDecoderImagePoolBuffer,
              "CalculateDecoderImagePoolBuffer"},
             {901, &INx2GraphicsSystemSession::Stub, "VideoInitialize (guessed)"},
+            // nn::codec::video::detail::ipc::Finalize (FinalizeServerContext in newer SDKs) sends
+            // 903() after closing its sessions and reads only the result.
+            {903, &INx2GraphicsSystemSession::Stub, "VideoFinalize"},
             {902, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSession (guessed)"},
             {905, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSessionWithFlag"},
             {906, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSessionWithVersion"},
@@ -2863,12 +2924,17 @@ private:
 
     // 1111(u32): a version or mode number the server checks and records.
     void SetFeatureVersion(HLERequestContext& ctx) {
-        LOG_INFO(Service, "nx2:gsv TIPC 1111 value {:#x}", ctx.CommandBuffer()[2]);
+        // Hyrule Warriors sends it ~50 times a second with the same value (89% of its log lines).
+        const u32 value = ctx.CommandBuffer()[2];
+        if (std::exchange(m_feature_version, value) != value) {
+            LOG_INFO(Service, "nx2:gsv TIPC 1111 value {:#x}", value);
+        }
         TipcReplyWords(ctx, {});
     }
 
     std::set<u32> m_address_spaces;        ///< Ids attached with 434
     bool m_client_handle_registered = false; ///< Set by 11
+    u32 m_feature_version = ~0U;           ///< Last value of 1111, logged when it changes
 
     // Index of the first raw data word of a TIPC request: header (2 words), then an optional
     // special header with pid and copy/move handle words.

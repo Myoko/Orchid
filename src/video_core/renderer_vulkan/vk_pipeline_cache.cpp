@@ -256,6 +256,7 @@ ShaderTranslationKey MakeShaderTranslationKey(const GraphicsPipelineCacheKey& pi
     if (key.input_topology == Shader::InputTopology::Points || has_geometry) {
         key.point_size = state.point_size;
     }
+    key.layer_viewport_relative = has_geometry && state.layer_viewport_relative != 0;
     if (state.xfb_enabled) {
         if (device.IsExtTransformFeedbackSupported()) {
             key.xfb_enabled = true;
@@ -1272,6 +1273,19 @@ bool PipelineCache::HasReusableShaders(const GraphicsPipelineCacheKey& key) cons
     return use_shader_reuse && shader_reuse.Contains(MakeShaderTranslationKey(key, device));
 }
 
+// A geometry program drawing with the layer relative to the viewport is lowered on every host:
+// Vulkan's NV extensions don't offset the layer by the viewport, the lowered passthrough does.
+Shader::HostTranslateInfo PipelineCache::StageHostInfo(const ShaderTranslationKey& key,
+                                                       size_t index) const {
+    Shader::HostTranslateInfo info{host_info};
+    if (key.layer_viewport_relative && index == static_cast<size_t>(Maxwell::ShaderType::Geometry)) {
+        info.support_viewport_mask = false;
+        info.support_geometry_shader_passthrough = false;
+        info.layer_viewport_relative = true;
+    }
+    return info;
+}
+
 // Translation (Maxwell code to IR) and SPIR-V emission of a graphics pipeline's programs. Reads
 // nothing of the pipeline key but `key`, so the shaders fit every pipeline with that key and
 // environments that answer the same (vk_shader_reuse.h). Null for programs with known issues.
@@ -1313,7 +1327,8 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
         Shader::Maxwell::Flow::CFG cfg(env, pools.flow_block, cfg_offset, index == 0);
         if (!uses_vertex_a || index != 1) {
             // Normal path
-            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info);
+            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg,
+                                               StageHostInfo(key, index));
         } else {
             // VertexB path when VertexA is present.
             auto& program_va{programs[0]};
@@ -1354,11 +1369,20 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
 
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage)};
         ConvertLegacyToGeneric(program, runtime_info);
+        const bool relative_layer_geometry = key.layer_viewport_relative &&
+            index == static_cast<size_t>(Maxwell::ShaderType::Geometry);
         if (index == static_cast<size_t>(Maxwell::ShaderType::Geometry)) {
             PruneUnreadGeometryOutputs(program, programs[static_cast<size_t>(Maxwell::ShaderType::Pixel)],
-                                       key, device.IsNvGeometryShaderPassthroughSupported());
+                                       key, device.IsNvGeometryShaderPassthroughSupported() &&
+                                                !relative_layer_geometry);
         }
-        const std::vector<u32> code{EmitSPIRV(profile, runtime_info, program, binding)};
+        Shader::Profile stage_profile{profile};
+        if (relative_layer_geometry) {
+            // Translated as on hosts without the NV extensions (StageHostInfo), emitted the same.
+            stage_profile.support_viewport_mask = false;
+            stage_profile.support_geometry_shader_passthrough = false;
+        }
+        const std::vector<u32> code{EmitSPIRV(stage_profile, runtime_info, program, binding)};
         device.SaveShader(code);
         (*modules)[stage_index] = BuildShader(device, code);
 

@@ -45,11 +45,17 @@ struct LoweredProgram {
     explicit operator bool() const { return error.empty(); }
 };
 
+/// The tessellation stage a program runs in: it decides which patch attribute accesses mean
+/// something (the control stage writes patches and reads its own back, evaluation reads them).
+enum class TessellationStage { None, Control, Evaluation };
+
 // Lower only operations whose semantics are representable by the existing
 // Maxwell frontend. These are new instructions, not reinterpretations of the
 // native bytes. Scheduling/control words are added by the environment adapter.
 inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geometry_stage = false,
-                                     bool support_cooperative_matrix = false) {
+                                     bool support_cooperative_matrix = false,
+                                     TessellationStage tessellation = TessellationStage::None) {
+    const bool tessellation_stage = tessellation != TessellationStage::None;
     LoweredProgram result;
     struct Relocation { u32 output_index; s64 target; };
     std::vector<Relocation> relocations;
@@ -1405,7 +1411,12 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
         }
         case 0x919: case 0x9c3: { // S2R / S2UR thread and workgroup identities.
             const u32 special = insn.Bits(72, 8);
-            if ((special == 17 || special == 29) && !geometry_stage)
+            // The invocation id (17) exists in geometry and tessellation control programs, the
+            // invocation info (29, the patch size in byte 2) also in tessellation evaluation.
+            const bool identity_stage = special == 17
+                ? geometry_stage || tessellation == TessellationStage::Control
+                : geometry_stage || tessellation_stage;
+            if ((special == 17 || special == 29) && !identity_stage)
                 return fail(index, "native geometry identity outside geometry stage");
             if (insn.words[1] || insn.words[2] != (special << 8) ||
                 (special != 0 && special != 17 && special != 29 && special != 30 && special != 31 &&
@@ -2224,22 +2235,51 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
             break;
         }
         case 0x923:
-            if (!geometry_stage) return fail(index, "native stage buffer read outside geometry stage");
+            // The map region turns a vertex ordinal into its handle, as for geometry programs.
+            if (!geometry_stage && !tessellation_stage)
+                return fail(index, "native stage buffer read outside geometry stage");
             if (insn.words[1] || insn.words[2] || insn.Bits(24, 8) == 255)
                 return fail(index, "native stage buffer read mode");
             emit(base(0x5c98000000000000ULL) | (u64{15} << 39) | (u64{insn.Bits(24, 8)} << 20));
             break;
         case 0x321: // ALD
         case 0x322: { // AST
-            if (insn.Bits(76, 2) || insn.Bits(79, 1)) return fail(index, "native indexed/patch attribute access");
+            // Bit 76 = .P (patch attribute), 77 = .PHYS (indexed), 79 = .O (ALD reads outputs).
+            // Maxwell's ALD/AST .P (bit 31) maps a[0x00-0x14] to the tessellation levels and
+            // a[0x18+] to generic patches in both tessellation stages, so slots pair up unchanged.
+            // Its ALD has no output read for vertex attributes, only for a control stage's patches.
+            const bool patch = insn.Bits(76, 1) != 0, output = insn.Bits(79, 1) != 0;
             const u32 address = insn.Bits(40, 10);
             const u32 components = insn.Bits(74, 2) + 1;
-            if (address % 4 || address + components * 4 > 0x400 || insn.Bits(24, 8) != 255) {
+            const u32 vertex = opcode == 0x321 ? insn.Bits(32, 8) : insn.Bits(64, 8);
+            // An evaluation program reads its tessellation coordinate a[0x2f0] as an output
+            // indexed by its lane id (Mesa NAK from_nir.rs load_tess_coord_xy).
+            const bool tess_coord = opcode == 0x321 && output && !patch &&
+                tessellation == TessellationStage::Evaluation && address >= 0x2f0 &&
+                address + components * 4 <= 0x2f8 &&
+                std::any_of(code.begin(), code.begin() + index, [&](const Instruction& prior) {
+                    return prior.Bits(0, 12) == 0x919 && prior.Bits(72, 8) == 0 &&
+                           prior.Bits(16, 8) == vertex;
+                });
+            const bool access = !patch ? !output || tess_coord
+                : opcode == 0x322 ? tessellation == TessellationStage::Control && !output
+                : output ? tessellation == TessellationStage::Control
+                         : tessellation == TessellationStage::Evaluation;
+            if (insn.Bits(77, 1) || !access) return fail(index, "native indexed/patch attribute access");
+            if (address % 4 || address + components * 4 > (patch ? 0x1f8U : 0x400U) ||
+                insn.Bits(24, 8) != 255) {
                 return fail(index, "native attribute address or indexing");
             }
+            // The frontend reads only generic patches back, not the tessellation levels.
+            if (opcode == 0x321 && patch && address < 0x18)
+                return fail(index, "native tessellation level read");
+            // A control program writes only its own control point (the frontend's store target).
+            if (tessellation == TessellationStage::Control && opcode == 0x322 && !patch &&
+                insn.Bits(64, 8) != 255)
+                return fail(index, "native control point store to another vertex");
             // a[0x5c] has no Maxwell meaning (Ampere uses it for a per-primitive hint such as the
             // shading rate). Nothing reads it back; dropping the store keeps full-rate shading.
-            if (opcode == 0x322 && address == 0x5c && components == 1) break;
+            if (opcode == 0x322 && !patch && address == 0x5c && components == 1) break;
             u32 value_reg = opcode == 0x321 ? static_cast<u32>(dest) : insn.Bits(32, 8);
             if (value_reg == 255) {
                 if (opcode == 0x321) break; // load into RZ: nothing to do
@@ -2248,10 +2288,10 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                 value_reg = 250;
             }
             if (value_reg + components > 255) return fail(index, "native attribute register range");
-            const u32 vertex = opcode == 0x321 ? insn.Bits(32, 8) : insn.Bits(64, 8);
+            // The frontend reads the own tessellation coordinate whatever the vertex.
             const u64 translated = (opcode == 0x321 ? 0xefd8000000000000ULL : 0xeff0000000000000ULL) |
                 predicate | value_reg | (u64{255} << 8) | (u64{address} << 20) |
-                (u64{vertex} << 39) | (u64{components - 1} << 47);
+                (u64{patch} << 31) | (u64{tess_coord ? 255U : vertex} << 39) | (u64{components - 1} << 47);
             result.instructions.push_back(translated);
             break;
         }

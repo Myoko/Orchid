@@ -19,6 +19,7 @@ public:
         // clang-format off
         static const FunctionInfo functions[] = {
             {10, D<&IGraphicsScaleController::GetCurrentGraphicsScale>, "GetCurrentGraphicsScale"},
+            {1050, D<&IGraphicsScaleController::SetGraphicsScaleChangedNotificationEnabled>, "SetGraphicsScaleChangedNotificationEnabled"},
         };
         // clang-format on
         RegisterHandlers(functions);
@@ -32,6 +33,13 @@ private:
         *out_scale = 10;
         *out_unknown1 = 0;
         *out_unknown2 = 0;
+        R_SUCCEED();
+    }
+
+    // nn::oe::SetGraphicsScaleChangedNotificationEnabled(bool): proxy slot 10, a u8 in and only a
+    // result out. The scale never changes here, so there is no notification to enable.
+    Result SetGraphicsScaleChangedNotificationEnabled(bool enabled) {
+        LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
         R_SUCCEED();
     }
 };

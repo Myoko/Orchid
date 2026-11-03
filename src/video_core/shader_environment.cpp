@@ -442,12 +442,18 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         }
         if (status == Shader::Ampere::ProgramCaptureState::Result::Complete) break;
     }
+    const auto tessellation = stage == Shader::Stage::TessellationControl
+        ? Shader::Ampere::TessellationStage::Control
+        : stage == Shader::Stage::TessellationEval ? Shader::Ampere::TessellationStage::Evaluation
+                                                   : Shader::Ampere::TessellationStage::None;
     auto lowered = Shader::Ampere::LowerToMaxwell(native, stage == Shader::Stage::Geometry,
                                                   support_cooperative_matrix &&
-                                                      stage == Shader::Stage::Compute);
+                                                      stage == Shader::Stage::Compute,
+                                                  tessellation);
     // Upstream's lowering covers forms for games without dumps here; it does not know this fork's
-    // geometry-stage rules, so geometry programs stay with ours.
-    if (!lowered && stage != Shader::Stage::Geometry) {
+    // geometry and tessellation stage rules, so those programs stay with ours.
+    if (!lowered && stage != Shader::Stage::Geometry &&
+        tessellation == Shader::Ampere::TessellationStage::None) {
         if (auto upstream = Shader::Ampere::LowerToMaxwellUpstream(native)) lowered = std::move(upstream);
     }
     // EDEN_NX2_REJECT=<hex address>,...: treat these programs as rejected (to find which newly
@@ -641,8 +647,7 @@ GraphicsEnvironment::GraphicsEnvironment(Tegra::Engines::Maxwell3D& maxwell3d_,
         }
     }
     if (native) {
-        if (program != Maxwell::ShaderType::VertexB && program != Maxwell::ShaderType::Geometry &&
-            program != Maxwell::ShaderType::Pixel && !mesh_slot) {
+        if (program == Maxwell::ShaderType::VertexA) {
             if (std::getenv("EDEN_NX2_SHADER_DUMP")) {
                 InitializeNativeCode(nullptr);
             }

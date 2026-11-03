@@ -52,6 +52,7 @@ add_executable(tests
     video_core/ampere_kirby.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_geometry_lowering.cpp
+    video_core/geometry_layer_viewport_relative.cpp
     video_core/ampere_geometry_exit.cpp
     video_core/ampere_uniform_lea.cpp
     video_core/ampere_integer_multiply.cpp
@@ -61,6 +62,7 @@ add_executable(tests
     video_core/ampere_sured.cpp
     video_core/ampere_release_guards.cpp
     video_core/ampere_release_f2i.cpp
+    video_core/syncpoint_manager.cpp
     input_common/calibration_configuration_job.cpp
 )
 

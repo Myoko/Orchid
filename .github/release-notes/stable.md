@@ -1,51 +1,49 @@
-## What's new in 0.5.1
+## What's new in 0.6.0
 
-0.5.1 brings in the main Eglantine project (Djihads80/Eglantine, 261 commits since build 104) and
-rdenno's fixes on top of it, merged with this fork's Mario Tennis Fever and Hyrule Warriors work.
-It is a big merge: if a game runs worse than in 0.5.0, please report it and keep 0.5.0 around.
+0.6.0 is about the two games this fork cares about most, Mario Tennis Fever and Hyrule Warriors:
+Age of Imprisonment, plus fixes for other Switch 2 exclusives.
 
-### Faster -pgo builds
+### Mario Tennis Fever
 
-- The `-pgo` downloads are now built against Eglantine's own profile instead of Eden's Switch 1
-  profile. With Eden's, Mario Kart World ran at about half the speed of the normal build;
-  if you switched away from the `-pgo` build because it was slower, try it again.
-
-### Mario Tennis Fever (from rdenno)
-
-- **Scenery around the court is drawn again:** the game samples its depth buffer in a format that
-  wasn't known (X8Z24 with UNORM components), so the arch and the castle stadium were missing.
-- **No crash right at boot:** the client's core now runs before an HLE service reply wakes it,
-  as on hardware. One of the game's worker threads relied on that window.
-- Framebuffers use the fewest layers of their attachments (this fork already had that fix).
+- **No more stray shadow spots:** dark blobs lay on floors and courts, most of all in Adventure
+  mode, and moved with the camera instead of with anything that casts a shadow. The game draws its
+  four shadow cascades in one pass and asks the GPU (register 0x11F0) to put each cascade into its
+  own layer of the shadow map; that request was ignored, so every cascade landed in the first
+  layer. Fixed on AMD and NVIDIA alike, at the same frame rate. Far shadows that were missing
+  (the lobby's stairs, for example) are drawn now too.
+- **Grass courts have their grass blades again:** the turf is drawn with tessellation shaders,
+  which were rejected, so the grass court rendered flat.
 
 ### Hyrule Warriors: Age of Imprisonment
 
-- A texture buffer at an unmapped address no longer aborts the emulator (rdenno; a crash from a
-  user's log).
-- Tested again on this build: boot, first-time setup and the opening cutscene at a steady 60 fps,
-  no rejected shaders. Combat is still untested.
+- **No freeze at the end of a movie:** the game froze on the last frame of any movie that played
+  to its end (the opening movie, and story movies later on). The video decoder now hands the
+  player's frames back after the end of the stream as the game expects.
+- Logs stay small: a graphics command the game sends about 50 times a second filled most of the
+  log; it is logged once now.
 
-### From the main Eglantine project
+### Other games
 
-- **Linux and AMD:** BC3 textures no longer flash on RADV, fewer ASTC decode stalls, lower RAM
-  use, a buffer cache crash fixed.
-- **Memory:** 16 MiB Vulkan memory blocks, a texture cache that keeps within the usable VRAM and
-  frees the emptiest blocks first, smaller JIT block tables, unused pipelines and shader modules
-  freed.
-- **Graphics:** mesh and task shaders, a stand-in upscale for Fire Emblem: Fortune's Weave's DLSS,
-  sparse texture fixes, presents cropped to their frame size, RGB10A2 presents.
-- **Shaders:** upstream's Ampere translator is kept as a fallback. It runs when this fork's
-  translator rejects a program, so forms that games like Splatoon Raiders and Kirby Air Riders use
-  are covered too.
-- **Video:** AV1 and newer-SDK video decoding.
-- **Services:** camera session, more vi2/am/audio/nsd/ssl commands, software keyboard text for
-  Pokopia and Fire Emblem.
-- **NUP packages:** load NUP containers; Convert to NUP in the Qt app and `eden-cli --pack-nup`.
-- Frame generation settings are saved.
+- **Donkey Kong Bananza:** the intro after New Game is no longer a flat lavender screen (its
+  upscaler reads and writes the frame through other slots). Gameplay still renders black.
+- **Mario Kart World:** a possible crash in a race ("access violation" in the syncpoint manager,
+  Djihads80/Eglantine#74) is guarded against: a syncpoint id past the table is dropped and logged.
+- **Welcome Tour and Mario Kart World:** the Switch 2 scale, chat and camera commands they send at
+  boot are answered, so they log no unimplemented commands at startup.
 
-### Not taken over, please report if these games got worse
+### Tested on this build
 
-- Upstream's lazy GPU-only memory regions (`EDEN_NX2_GPU_ONLY_LAZY`, a RAM saving): they didn't
-  fit this fork's sparse memory design.
-- Upstream's decoder image path for video: Fire Emblem's movies use this fork's path.
-- The reply to graphics-system command 115 is this fork's, not upstream's.
+Headless on Linux with an AMD GPU (RADV):
+
+- Mario Tennis Fever: the Adventure lobby and a grass-court match at 1x and 2x resolution, 60 fps,
+  no stray shadows.
+- Hyrule Warriors: the opening movie into the cutscene after it, also when skipping with A.
+- All 19 games in the test set boot to their title or menu, except Super Mario Galaxy 2 and the
+  Duskbloods network test (see below).
+
+### Known issues
+
+- **Super Mario Galaxy 2 (Switch 2 version)** closes about 5 seconds after start: the game's own
+  Vulkan driver fails to create its device. The same happens in 0.5.1.
+- **Donkey Kong Bananza:** gameplay still renders black.
+- The Duskbloods network test isn't part of this release.

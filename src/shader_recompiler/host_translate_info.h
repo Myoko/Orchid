@@ -40,6 +40,8 @@ struct HostTranslateInfo {
     bool support_conditional_barrier{}; ///< True when the device supports barriers in conditional
                                         ///< control flow
     bool single_lane_geometry_subgroups{};
+    /// The render target layer is offset by the viewport index (Maxwell 0x11F0); per pipeline.
+    bool layer_viewport_relative{};
 
     void ApplyDescriptorLimitPolicy() noexcept {
         if (min_ssbo_alignment == 0) {
