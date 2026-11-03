@@ -116,8 +116,14 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
 
 namespace {
 
-// Switch 2 titles boot as a loose ExeFS, with main.npdm next to main.
-bool IsSwitch2Program(const FileSys::VirtualFile& file) {
+// The memory layout is picked from the NPDM, before the kernel exists.
+bool IsSwitch2Program(Core::System& system, const FileSys::VirtualFilesystem& vfs,
+                      const std::string& filepath, u64 program_id, std::size_t program_index) {
+    const auto file = GetGameFileFromPath(vfs, filepath);
+    if (file == nullptr) {
+        return false;
+    }
+
     FileSys::ProgramMetadata metadata;
     if (FileSys::NupContainer::IsNupFile(file)) {
         FileSys::NupContainer nup{file};
@@ -137,10 +143,21 @@ bool IsSwitch2Program(const FileSys::VirtualFile& file) {
         return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
                metadata.IsSwitch2();
     }
-    const auto dir = file != nullptr ? file->GetContainingDirectory() : nullptr;
+
+    const auto dir = file->GetContainingDirectory();
     const auto npdm = dir != nullptr ? dir->GetFile("main.npdm") : nullptr;
-    return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
-           metadata.IsSwitch2();
+    if (npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success) {
+        return metadata.IsSwitch2();
+    }
+
+    // NSP/XCI and installed NCAs keep the NPDM in the program NCA's ExeFS.
+    const auto loader = Loader::GetLoader(system, file, program_id, program_index);
+    if (loader == nullptr ||
+        loader->ReadProgramMetadata(metadata) != Loader::ResultStatus::Success) {
+        return false;
+    }
+
+    return metadata.IsSwitch2();
 }
 
 } // namespace
@@ -337,7 +354,8 @@ struct System::Impl {
 
         const bool switch2_program =
             virtual_filesystem != nullptr &&
-            IsSwitch2Program(GetGameFileFromPath(virtual_filesystem, filepath));
+            IsSwitch2Program(system, virtual_filesystem, filepath, params.program_id,
+                             params.program_index);
         Settings::SetCurrentProgramIsSwitch2(switch2_program);
         Settings::SetAstcRecompressionOverride(std::nullopt);
 
