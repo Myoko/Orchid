@@ -24,6 +24,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/texture.h"
@@ -351,7 +352,7 @@ void Maxwell3D::ProcessDirtyRegisters(u32 method, u32 argument) {
     // the state they were begun with: NVN's draw macros reset the base instance (and its copy in
     // c[0][0x644]) right after the loop, before the macro returns.
     if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method)) [[unlikely]] {
-        draw_manager.DrawDeferred(*this);
+        draw_manager.DrawDeferred(*this, true);
     }
     regs.reg_array[method] = argument;
     for (auto const& table : dirty.tables)
@@ -534,6 +535,10 @@ void Maxwell3D::DumpRecentWrites(u32 method) {
     }
     LOG_ERROR(HW_GPU, "Write to {:#x} while macro {:#x} collects parameters ({} so far); last writes:",
               method, executing_macro, macro_params.size());
+    if (!record_write_history) {
+        LOG_ERROR(HW_GPU, "Register write history disabled; EDEN_NX2_3D_HISTORY=1 enables it");
+        return;
+    }
     for (size_t i = 0; i < recent_writes.size(); ++i) {
         const auto& w = recent_writes[(recent_write_index + i) % recent_writes.size()];
         if (w.amount != 0) {
@@ -553,7 +558,7 @@ void Maxwell3D::CallMultiMethod(Core::System& system, u32 method, const u32* bas
     }
     // As in ProcessDirtyRegisters: the paths below write without it.
     if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method)) [[unlikely]] {
-        draw_manager.DrawDeferred(*this);
+        draw_manager.DrawDeferred(*this, true);
     }
     switch (method) {
     case MAXWELL3D_REG_INDEX(const_buffer.buffer):
@@ -600,7 +605,12 @@ void Maxwell3D::ProcessMacroUpload(u32 data) {
 }
 
 void Maxwell3D::ProcessMacroBind(u32 data) {
-    GetNativeMacroPositions()[regs.load_mme.start_address_ptr++] = data;
+    // A pointer past the start address table binds nothing, as on the split thread's front.
+    const auto positions = GetNativeMacroPositions();
+    const u32 pointer = regs.load_mme.start_address_ptr++;
+    if (pointer < positions.size()) {
+        positions[pointer] = data;
+    }
 }
 
 void Maxwell3D::ProcessFirmwareCall4() {
@@ -1020,6 +1030,21 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
     } else {
         split.Method(this, method, argument, is_last_call, nullptr);
     }
+    // A payload release (ProcessQueryGet) is now queued: acquires it meets need not drain.
+    if (method == MAXWELL3D_REG_INDEX(report_semaphore.query) && Nx2AcquireQueuedEnabled()) {
+        Regs::ReportSemaphore report{};
+        report.address_high = fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_high)];
+        report.address_low = fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_low)];
+        report.payload = fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.payload)];
+        report.query.raw = value;
+        if (report.query.operation == Regs::ReportSemaphore::Operation::Release &&
+            report.query.report.Value() == Regs::ReportSemaphore::Report::Payload &&
+            report.query.reduction_enable == 0) {
+            if (const auto device = memory_manager.GpuToCpuAddress(report.Address())) {
+                split.NoteQueuedRelease(*device, report.payload);
+            }
+        }
+    }
 }
 
 void Maxwell3D::FrontCallMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
@@ -1145,7 +1170,7 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
             engine.native_jit = std::make_shared<TuringMacroJit>();
         }
         engine.native_jit->Prepare(engine.native_code, engine.native_code_generation);
-        const auto parameter_count = fs.parameters.size();
+        const size_t parameter_count = fs.parameters.size();
         // TEMP diagnostic (EDEN_NX2_MME_TRACE=<dir>): dump the macro code once and trace the
         // first calls of the macro at 0x1d2 (parameters and emitted methods).
         static const char* const trace_dir = std::getenv("EDEN_NX2_MME_TRACE");

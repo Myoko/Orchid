@@ -36,6 +36,7 @@
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
+#include "video_core/renderer_vulkan/vertex_repack.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -68,7 +69,7 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
-constexpr u32 CACHE_VERSION = 25;
+constexpr u32 CACHE_VERSION = 26;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
@@ -694,6 +695,8 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     dynamic_features.has_dynamic_vertex_input =
         device.IsExtVertexInputDynamicStateSupported() &&
         Settings::values.vertex_input_dynamic_state.GetValue();
+    dynamic_features.has_static_vertex_repack =
+        StaticVertexRepackEnabled(device.GetMinVertexInputBindingStrideAlignment());
 
     dynamic_features.has_provoking_vertex = device.IsExtProvokingVertexSupported();
     dynamic_features.has_provoking_vertex_first_mode =
@@ -711,9 +714,17 @@ constexpr u32 UsedPipelinesMagic = 0x31505545; // "EUP1"
 // Pipelines the last two sessions used are built at boot. Each holds ~0.45 MB of driver memory:
 // title 1 built 4,800 from eight sessions, 1.5 GB more than building them on first use (but that
 // stalled frames 4x as often), while one session of its title screen uses ~1,500.
+// MoltenVK keeps the previous eight sessions: a pipeline built while playing goes through
+// SPIR-V -> MSL -> Metal, far more than the 2-3 ms the shorter window assumes, so each one
+// built at boot is a stutter avoided.
 constexpr u8 UsedPipelinesMaxAge = 2;
+constexpr u8 UsedPipelinesMaxAgeMoltenVK = 8;
 
-std::unordered_map<u64, u8> LoadUsedPipelines(const std::filesystem::path& path) {
+u8 MaxUsedPipelineAge(const Device& device) {
+    return device.IsMoltenVK() ? UsedPipelinesMaxAgeMoltenVK : UsedPipelinesMaxAge;
+}
+
+std::unordered_map<u64, u8> LoadUsedPipelines(const std::filesystem::path& path, u8 max_age) {
     std::unordered_map<u64, u8> used;
     std::ifstream file{path, std::ios::binary};
     u32 magic{}, count{};
@@ -729,7 +740,7 @@ std::unordered_map<u64, u8> LoadUsedPipelines(const std::filesystem::path& path)
             !file.read(reinterpret_cast<char*>(&age), sizeof(age))) {
             break;
         }
-        if (age < UsedPipelinesMaxAge) { // lists saved with a longer window
+        if (age < max_age) { // lists saved with a longer window
             used.emplace(hash, age);
         }
     }
@@ -742,6 +753,17 @@ std::unordered_map<u64, u8> LoadUsedPipelines(const std::filesystem::path& path)
 // memory built before the game started; the list is only saved at exit or after two minutes, so a
 // boot that ran out of memory never saved one and the next boot did the same.
 constexpr size_t MaxPipelinesWithoutUsedList = 3000;
+
+// True when the transferable cache at path has the header this build writes (shader_environment.cpp).
+bool IsOwnPipelineCache(const std::filesystem::path& path, u32 version) {
+    static constexpr std::array<char, 8> Magic{'y', 'u', 'z', 'u', 'c', 'a', 'c', 'h'};
+    std::ifstream file{path, std::ios::binary};
+    std::array<char, 8> magic{};
+    u32 file_version{};
+    return file.read(magic.data(), magic.size()) &&
+           file.read(reinterpret_cast<char*>(&file_version), sizeof(file_version)) &&
+           magic == Magic && file_version == version;
+}
 
 // EDEN_NX2_PRELOAD_ALL_PIPELINES=1 builds every cached pipeline at boot, as before.
 bool PreloadAllPipelines() {
@@ -780,7 +802,7 @@ void PipelineCache::SaveUsedPipelines() {
         next.emplace(hash, u8{0});
     }
     for (const auto& [hash, age] : used_pipelines) {
-        if (age + 1 < UsedPipelinesMaxAge) {
+        if (age + 1 < MaxUsedPipelineAge(device)) {
             next.try_emplace(hash, static_cast<u8>(age + 1));
         }
     }
@@ -862,15 +884,30 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         LOG_ERROR(Common_Filesystem, "Failed to create pipeline cache directories");
         return;
     }
-    pipeline_cache_filename = base_dir / "vulkan.bin";
-    used_pipelines_filename = base_dir / "vulkan_used.bin";
-    used_pipelines = LoadUsedPipelines(used_pipelines_filename);
+    // Upstream Eglantine and other forks use the same <title>/vulkan*.bin names with other cache
+    // versions and delete a file of another version at boot, so switching between builds started
+    // every run with no pipelines (RX 6600 log: "Deleting old pipeline cache", ~600 pipelines
+    // built in game). Own names let the caches coexist; files this version wrote under the old
+    // names move over once.
+    const auto cache_path = [&](std::string_view stem) {
+        return base_dir / fmt::format("{}.mythos.bin", stem);
+    };
+    if (!Common::FS::Exists(cache_path("vulkan")) &&
+        IsOwnPipelineCache(base_dir / "vulkan.bin", CACHE_VERSION)) {
+        for (const std::string_view stem : {"vulkan", "vulkan_pipelines", "vulkan_used"}) {
+            std::error_code ec;
+            std::filesystem::rename(base_dir / fmt::format("{}.bin", stem), cache_path(stem), ec);
+        }
+    }
+    pipeline_cache_filename = cache_path("vulkan");
+    used_pipelines_filename = cache_path("vulkan_used");
+    used_pipelines = LoadUsedPipelines(used_pipelines_filename, MaxUsedPipelineAge(device));
     used_pipelines_saved = std::chrono::steady_clock::now();
     size_t skipped_pipelines = 0;
     size_t queued_graphics = 0;
 
     if (use_vulkan_pipeline_cache) {
-        vulkan_pipeline_cache_filename = base_dir / "vulkan_pipelines.bin";
+        vulkan_pipeline_cache_filename = cache_path("vulkan_pipelines");
         vulkan_pipeline_cache =
             LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
     }
@@ -1124,6 +1161,11 @@ void PipelineCache::TickFrame() {
 }
 
 void PipelineCache::EvictUnusedPipelines() {
+    // Building a pipeline again on MoltenVK means a Metal compile mid-game, far dearer than the
+    // 2-3 ms below, so none are evicted there.
+    if (device.IsMoltenVK()) {
+        return;
+    }
     // Each built pipeline holds ~0.45 MB of driver memory and none was ever destroyed, so it grew
     // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
     // this long is destroyed; it takes 2-3 ms to build again from the driver's pipeline cache.
@@ -1180,7 +1222,7 @@ bool PipelineCache::CanSkipDraw() const noexcept {
     // Usually these shaders are only used once for building textures so we can assume they
     // can't be built async
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    if (draw_state.index_buffer.count <= 6 || draw_state.vertex_buffer.count <= 6) {
+    if (draw_state.draw_element_count <= 6) {
         return false;
     }
     return true;

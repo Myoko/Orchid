@@ -35,6 +35,9 @@ public:
     }
 
     void UpdatePagesCachedBatch(std::span<const std::pair<DAddr, size_t>> ranges, s32 delta) {
+        if (ranges.empty()) {
+            return;
+        }
         ++update_calls;
         for (const auto& [addr, size] : ranges) {
             Apply(addr, size, delta);
@@ -562,6 +565,34 @@ TEST_CASE("MemoryTracker: Cached write downloads") {
     REQUIRE(memory_track->IsRegionCpuModified(c + PAGE, PAGE));
     REQUIRE(!memory_track->IsRegionGpuModified(c + PAGE, PAGE));
     memory_track->MarkRegionAsCpuModified(c, WORD);
+    REQUIRE(rasterizer.Count() == 0);
+}
+
+TEST_CASE("MemoryTracker: cached writes preserve tracking counts") {
+    RasterizerInterface rasterizer;
+    std::optional<MemoryTracker> memory_track(rasterizer);
+    memory_track->UnmarkRegionAsCpuModified(c, WORD * 2);
+    REQUIRE(rasterizer.UpdateCalls() == 1);
+    REQUIRE(rasterizer.UpdateCallsList().size() == 1);
+    REQUIRE(rasterizer.UpdateCallsList().front() == std::tuple{c, WORD * 2, 1});
+
+    memory_track->CachedCpuWrite(c + PAGE, PAGE);
+    memory_track->CachedCpuWrite(c + PAGE * 2, PAGE);
+    memory_track->CachedCpuWrite(c + PAGE * 4, PAGE);
+    REQUIRE(rasterizer.Count() == 125);
+    REQUIRE(rasterizer.Count(c + PAGE) == 0);
+    REQUIRE(rasterizer.Count(c + PAGE * 2) == 0);
+    REQUIRE(rasterizer.Count(c + PAGE * 3) == 1);
+    REQUIRE(rasterizer.Count(c + PAGE * 4) == 0);
+    const auto update_calls = rasterizer.UpdateCalls();
+    memory_track->FlushCachedWrites();
+    REQUIRE(rasterizer.UpdateCalls() == update_calls);
+    REQUIRE(rasterizer.Count() == 125);
+    REQUIRE(memory_track->IsRegionCpuModified(c + PAGE, PAGE));
+    REQUIRE(memory_track->IsRegionCpuModified(c + PAGE * 2, PAGE));
+    REQUIRE_FALSE(memory_track->IsRegionCpuModified(c + PAGE * 3, PAGE));
+    REQUIRE(memory_track->IsRegionCpuModified(c + PAGE * 4, PAGE));
+    memory_track->MarkRegionAsCpuModified(c, WORD * 2);
     REQUIRE(rasterizer.Count() == 0);
 }
 

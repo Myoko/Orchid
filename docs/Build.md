@@ -1,9 +1,9 @@
-# Building Eglantine
+# Building Orchid
 
 > [!WARNING]
 > This guide is intended for developers ONLY. If you are not a developer or packager, you are unlikely to receive support.
 
-This is a full-fledged guide to build Eglantine on all supported platforms.
+This is a full-fledged guide to build Orchid on all supported platforms.
 
 If you already have a development environment set up:
 
@@ -20,11 +20,11 @@ First, you must [install some dependencies](Deps.md).
 
 ## Clone
 
-Next, you will want to clone Eglantine via the terminal:
+Next, you will want to clone Orchid via the terminal:
 
 ```sh
-git clone https://github.com/Djihads80/Eglantine.git
-cd Eglantine
+git clone https://github.com/MythosOfs/Orchid.git
+cd Orchid
 ```
 
 Or use Qt Creator (Create Project -> Import Project -> Git Clone).
@@ -47,7 +47,7 @@ This is the recommended GUI method for Linux, macOS, and Windows.
 > [!WARNING]
 > On MSYS2, to use Qt Creator you are recommended to *also* install Qt from the online installer, ensuring to select the "MinGW" version.
 
-Open the CMakeLists.txt file in your cloned directory via File -> Open File or Project (Ctrl+O), if you didn't clone Eglantine via the project import tool.
+Open the CMakeLists.txt file in your cloned directory via File -> Open File or Project (Ctrl+O), if you didn't clone Orchid via the project import tool.
 
 Select your desired "kit" (usually, the default is okay). RelWithDebInfo or Release is recommended:
 
@@ -66,7 +66,7 @@ Hit "Configure Project", then wait for CMake to finish configuring (may take a w
 >For all systems:
 >
 >- *CMake* **MUST** be in your PATH (and also *ninja*, if you are using it as `<GENERATOR>`)
->- You *MUST* be in the cloned *Eglantine* directory
+>- You *MUST* be in the cloned *Orchid* directory
 >
 >On Windows:
 >
@@ -135,12 +135,12 @@ cmake -S . -B build -G "<GENERATOR>" -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COM
 <img src="https://user-images.githubusercontent.com/42481638/216899164-6cee8482-3d59-428f-b1bc-e6dc793c9b20.png" width="500">
 
 - Click OK; now CLion will build a directory and index your code to allow for IntelliSense. Please be patient.
-- Once this process has been completed (No loading bar bottom right), you can now build Eglantine
-- In the top right, click on the drop-down menu, select all configurations, then select Eglantine
+- Once this process has been completed (No loading bar bottom right), you can now build Orchid
+- In the top right, click on the drop-down menu, select all configurations, then select Orchid
 
 <img src="https://user-images.githubusercontent.com/42481638/216899226-975048e9-bc6d-4ec1-bc2d-bd8a1e15ed04.png" height="500" >
 
-- Now run by clicking the play button or pressing Shift+F10, and Eglantine will auto-launch once built.
+- Now run by clicking the play button or pressing Shift+F10, and Orchid will auto-launch once built.
 
 <img src="https://user-images.githubusercontent.com/42481638/216899275-d514ec6a-e563-470e-81e2-3e04f0429b68.png" width="500">
 </details>
@@ -186,16 +186,16 @@ cmake --build build
 
 Your compiled executable will be in:
 
-- `build/bin/eglantine.exe` for Windows,
-- `build/bin/eglantine.app/Contents/MacOS/eglantine` for macOS,
-- and `build/bin/eglantine` for others.
+- `build/bin/orchid.exe` for Windows,
+- `build/bin/orchid.app/Contents/MacOS/orchid` for macOS,
+- and `build/bin/orchid` for others.
 
 ## GitHub-hosted builds
 
 The `release-binaries` workflow uses standard GitHub-hosted runners:
 
 - `ubuntu-24.04` produces Linux x86-64 AppImages, with and without PGO. These require glibc 2.39 or newer.
-- `macos-15` produces an Apple Silicon app for macOS 15 or newer. The zip contains `eglantine.app`, including the CLI at `Contents/MacOS/eden-cli`.
+- `macos-15` produces an Apple Silicon app for macOS 15 or newer. The zip contains `orchid.app`, including the CLI at `Contents/MacOS/eden-cli`.
 - `windows-2022` produces Windows x86-64 builds, with and without PGO.
 
 Pull requests targeting `nx2` or `nx2-experimental` trigger builds without publishing a release. Build-input changes pushed to either branch trigger builds and a prerelease. To build another branch, select **Actions > release-binaries > Run workflow** and choose the branch. Clear **Publish the binaries as a GitHub release** to upload artifacts without publishing a release. Manual runs require the workflow to exist on the repository's default branch. Workflow artifacts expire after seven days.
@@ -203,7 +203,7 @@ Pull requests targeting `nx2` or `nx2-experimental` trigger builds without publi
 The macOS package bundles Qt, its plugins, MoltenVK, and linked non-system libraries. Packaging checks the extracted archive for ARM64 binaries, bundled dependencies, valid signatures, JIT entitlements, frontend startup, and MoltenVK loading. To package a local macOS build with the same checks:
 
 ```sh
-QT_ROOT_DIR=/path/to/Qt/6.8.3/macos sh tools/macos/package.sh build eglantine-macos-arm64.zip
+QT_ROOT_DIR=/path/to/Qt/6.8.3/macos sh tools/macos/package.sh build orchid-macos-arm64.zip
 ```
 
 macOS builds are ad-hoc signed, not Developer ID signed or notarized. Gatekeeper may require approval in **System Settings > Privacy & Security**. They use Dynarmic's ARM64 JIT. NCE is only available on Linux and Android ARM64. These build and startup checks do not verify game compatibility or Vulkan rendering. See the [macOS caveat](Caveats.md#macos).

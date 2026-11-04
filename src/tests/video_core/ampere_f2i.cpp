@@ -59,6 +59,17 @@ TEST_CASE("Ampere byte F2I materializes constant and uniform sources",
     REQUIRE(static_cast<bool>(constant));
     REQUIRE(constant.instructions.front() ==
             (0x4c98000000070000ULL | 252 | (15ULL << 39) | (4ULL << 20) | (1ULL << 34)));
+    // |c| (bit 62) and -c (bit 63) on the constant are applied by an FADD before the conversion.
+    for (const u32 modifiers : {1U, 2U, 3U}) {
+        auto modified = code;
+        modified[0].words[1] = 0x00400400U | (modifiers << 30);
+        const auto lowered = LowerToMaxwell(modified);
+        REQUIRE(static_cast<bool>(lowered));
+        REQUIRE(lowered.instructions.size() > 1);
+        REQUIRE(lowered.instructions[1] ==
+                (0x5c58000000000000ULL | (7ULL << 16) | 249 | (252ULL << 8) | (255ULL << 20) |
+                 (u64{modifiers & 1} << 46) | (u64{modifiers >> 1} << 48)));
+    }
     for (const u32 source : {0U, 21U, 22U, 27U, 63U}) {
         auto uniform = code;
         uniform[0].words = {0x00157d05, source, 0x0821e100, 0x0001e400};
@@ -76,8 +87,9 @@ TEST_CASE("Ampere byte F2I rejects other widths, rounding, modifiers and registe
         {{0x00157305, 3, 0x0021e100, 0x0001e400}},
         {{0x0000794d, 0, 0x03800000, 0}},
     }};
+    // 0x0021e900 (bits 75-76 = 1) is the 16-bit destination, lowered since.
     for (const u32 mode : {0x0021c100U, 0x0021a100U, 0x00216100U, 0x0021e300U,
-                           0x0021e900U, 0x0061e100U, 0x0821e100U}) {
+                           0x0061e100U, 0x0821e100U}) {
         auto invalid = code;
         invalid[0].words[2] = mode;
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
@@ -92,7 +104,7 @@ TEST_CASE("Ampere byte F2I rejects other widths, rounding, modifiers and registe
         invalid[0].words = {0x00157d05, source, 0x0821e100, 0x0001e400};
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
     }
-    for (const u32 source : {0x00400440U, 0x04800400U, 0x40400400U, 0x80400400U}) {
+    for (const u32 source : {0x00400440U, 0x04800400U}) {
         auto invalid = code;
         invalid[0].words = {0x00157b05, source, 0x0021e100, 0x0001e400};
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
@@ -701,5 +713,37 @@ TEST_CASE("Ampere half explicit texel fetches keep unsupported formats and regis
     invalid = code;
     invalid[0].words[1] = 0x33c044f6;
     REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
+}
+
+TEST_CASE("Ampere F2I lowers truncated 16-bit destinations", "[video_core][ampere]") {
+    // F2I.TRUNC.U16 R5, R4 and F2I.TRUNC.S16 R5, R4 (Donkey Kong Bananza): bits 75-76 = 1 is the
+    // 16-bit destination of the byte form's mode. Maxwell F2I.U16/S16 saturates itself.
+    const Instruction exit{{0x0000794d, 0, 0x03800000, 0}};
+    const std::array<Instruction, 2> unsigned_code{{{{0x00057305, 4, 0x0020e800, 0}}, exit}};
+    const auto lowered = LowerToMaxwell(unsigned_code);
+    REQUIRE(static_cast<bool>(lowered));
+    // NaNs cleared into R250 first, then F2I.U16.F32.TRUNC R5, R250.
+    REQUIRE(lowered.instructions.size() == 4);
+    REQUIRE(lowered.instructions[2] == 0x5cb001800fa70905ULL);
+    std::array<Instruction, 2> signed_code{{{{0x00057305, 4, 0x0020e900, 0}}, exit}};
+    const auto signed_lowered = LowerToMaxwell(signed_code);
+    REQUIRE(static_cast<bool>(signed_lowered));
+    REQUIRE(signed_lowered.instructions.front() == 0x5cb0018000471905ULL);
+    signed_code[0].words[3] = 1; // unknown bits stay rejected
+    REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(signed_code)));
+}
+
+TEST_CASE("Ampere FRND lowers a constant-buffer source", "[video_core][ampere]") {
+    // FRND.F32.FLOOR R5, c[3][0x10] (Donkey Kong Bananza) -> Maxwell F2F_cbuf with ROUND mode.
+    const Instruction exit{{0x0000794d, 0, 0x03800000, 0}};
+    std::array<Instruction, 2> code{{
+        {{0x00057b07, (0x10U << 6) | (3U << 22), (2U << 11) | (1U << 14) | (2U << 20), 0}},
+        exit,
+    }};
+    const auto lowered = LowerToMaxwell(code);
+    REQUIRE(static_cast<bool>(lowered));
+    REQUIRE(lowered.instructions.front() == 0x4ca8048c00470a05ULL);
+    code[0].words[1] = (0x11U << 6) | (3U << 22); // unaligned offset
+    REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(code)));
 }
 } // namespace

@@ -10,11 +10,11 @@ source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 
-app="$stage/eglantine.app"
-ditto "$build_dir/bin/eglantine.app" "$app"
+app="$stage/orchid.app"
+ditto "$build_dir/bin/orchid.app" "$app"
 rm -f "$app/Contents/MacOS/nx2_switches.txt"
 cp "$build_dir/bin/eden-cli" "$app/Contents/MacOS/eden-cli"
-cp "$source_dir/dist/macos/eglantine.entitlements" "$app/Contents/Resources/"
+cp "$source_dir/dist/macos/orchid.entitlements" "$app/Contents/Resources/"
 mkdir -p "$app/Contents/Resources/licenses"
 cp -R "$source_dir/dist/licenses/." "$app/Contents/Resources/licenses/"
 test -s "$app/Contents/Frameworks/libMoltenVK.dylib"
@@ -36,7 +36,7 @@ find "$app/Contents" -type f | while IFS= read -r binary; do
             esac
         done
 done
-for executable in eglantine eden-cli; do
+for executable in orchid eden-cli; do
     binary="$app/Contents/MacOS/$executable"
     if ! otool -l "$binary" | awk '/cmd LC_RPATH/ {getline; getline; print $2}' |
         grep -qx '@executable_path/../Frameworks'; then
@@ -49,17 +49,17 @@ find "$app/Contents/Frameworks" "$app/Contents/PlugIns" -type f | while IFS= rea
         codesign --force --sign - "$binary"
     fi
 done
-codesign --force --sign - --entitlements "$app/Contents/Resources/eglantine.entitlements" \
+codesign --force --sign - --entitlements "$app/Contents/Resources/orchid.entitlements" \
     "$app/Contents/MacOS/eden-cli"
-codesign --force --sign - --entitlements "$app/Contents/Resources/eglantine.entitlements" "$app"
+codesign --force --sign - --entitlements "$app/Contents/Resources/orchid.entitlements" "$app"
 
 ditto -c -k --sequesterRsrc --keepParent "$app" "$output"
 ditto -x -k "$output" "$stage/unpacked"
-app="$stage/unpacked/eglantine.app"
+app="$stage/unpacked/orchid.app"
 
 plutil -lint "$app/Contents/Info.plist"
-test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = eglantine
-test -s "$app/Contents/Resources/eglantine.icns"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = orchid
+test -s "$app/Contents/Resources/orchid.icns"
 for notice in ffmpeg/COPYING.LGPLv2.1 ffmpeg/LICENSE.md dav1d/COPYING README.md; do
     cmp "$source_dir/dist/licenses/$notice" "$app/Contents/Resources/licenses/$notice"
 done
@@ -95,7 +95,7 @@ find "$app" -type f | while IFS= read -r binary; do
     done
 done
 
-for executable in eglantine eden-cli; do
+for executable in orchid eden-cli; do
     codesign --display --entitlements :- "$app/Contents/MacOS/$executable" \
         > "$stage/$executable-entitlements.plist"
     test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.allow-jit' \
@@ -123,7 +123,7 @@ if cli.returncode != 1 or "No ROM specified" not in output:
     raise SystemExit(f"CLI startup check failed ({cli.returncode}):\n{output}")
 
 with (stage / "gui-startup.log").open("w+") as log:
-    gui = subprocess.Popen([str(app / "Contents/MacOS/eglantine")],
+    gui = subprocess.Popen([str(app / "Contents/MacOS/orchid")],
                            stdout=log, stderr=subprocess.STDOUT, env=env)
     try:
         gui.wait(timeout=10)

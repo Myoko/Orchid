@@ -83,6 +83,8 @@ VK_DEFINE_HANDLE(VmaPool)
     FEATURE(KHR, PipelineExecutableProperties, PIPELINE_EXECUTABLE_PROPERTIES,                     \
             pipeline_executable_properties)                                                        \
     FEATURE(KHR, ShaderQuadControl, SHADER_QUAD_CONTROL, shader_quad_control)                      \
+    FEATURE(KHR, ShaderMaximalReconvergence, SHADER_MAXIMAL_RECONVERGENCE,                         \
+            shader_maximal_reconvergence)                                                          \
     FEATURE(KHR, WorkgroupMemoryExplicitLayout, WORKGROUP_MEMORY_EXPLICIT_LAYOUT,                  \
             workgroup_memory_explicit_layout)
 
@@ -565,6 +567,11 @@ FN_MAX_LIMIT_LIST
     /// Returns true if formatless image load is supported.
     bool IsFormatlessImageLoadSupported() const {
         return features.features.shaderStorageImageReadWithoutFormat;
+    }
+
+    /// Returns true if storage images of the extended formats (e.g. R16F, RG16F, R8) are supported.
+    bool IsStorageImageExtendedFormatsSupported() const {
+        return features.features.shaderStorageImageExtendedFormats;
     }
 
     /// Returns true if shader int64 is supported.
@@ -1187,6 +1194,12 @@ FN_MAX_LIMIT_LIST
 
     bool IsMoltenVK() const noexcept {
         return properties.driver.driverID == VK_DRIVER_ID_MOLTENVK;
+    }
+
+    /// The multiple vertex input binding strides must be. Metal needs 4 bytes, which MoltenVK
+    /// reports as minVertexInputBindingStrideAlignment through VK_KHR_portability_subset.
+    u32 GetMinVertexInputBindingStrideAlignment() const noexcept {
+        return IsMoltenVK() ? 4 : 1;
     }
 
     NvidiaArchitecture GetNvidiaArch() const noexcept {

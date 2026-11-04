@@ -12,4 +12,4 @@
 ### Kernel
 - Started threads are read under the scheduler lock and released on finalize (949a921)
 
-**Full changes:** https://github.com/MythosOfs/Eglantine/compare/build-1...build-2
+**Full changes:** https://github.com/MythosOfs/Orchid/compare/build-1...build-2

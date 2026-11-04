@@ -9,6 +9,7 @@
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging.h"
+#include "common/paged_scalar.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
@@ -295,36 +296,33 @@ T MemoryManager::Read(GPUVAddr addr) const {
         }
     }
 
-    if (auto page_pointer{GetPointer(addr)}; page_pointer) {
-        // NOTE: Avoid adding any extra logic to this fast-path block
-        T value;
-        std::memcpy(&value, page_pointer, sizeof(T));
-        return value;
-    }
-
-    static std::atomic<u32> reported{};
-    if (reported.fetch_add(1) < 16) {
-        LOG_ERROR(HW_GPU, "Read{} of unmapped GPU address {:#x}", sizeof(T) * 8, addr);
-    }
-
-    return {};
+    // A host pointer is only valid within its 4 KiB device page, even inside a big GPU page.
+    return Common::ReadPagedScalar<T>(addr, [&](GPUVAddr address) {
+        const u8* const page_pointer = GetPointer(address);
+        if (!page_pointer) {
+            static std::atomic<u32> reported{};
+            if (reported.fetch_add(1) < 16) {
+                LOG_ERROR(HW_GPU, "Read{} of unmapped GPU address {:#x}", sizeof(T) * 8,
+                          address);
+            }
+        }
+        return page_pointer;
+    });
 }
 
 template <typename T>
 void MemoryManager::Write(GPUVAddr addr, T data) {
-    if (auto page_pointer{GetPointer(addr)}; page_pointer) {
-        // NOTE: Avoid adding any extra logic to this fast-path block
-        std::memcpy(page_pointer, &data, sizeof(T));
-        return;
-    }
-    // A Switch 2 sparse block nobody wrote yet gets its memory now.
-    Tegra::Nx2BackSparseWrite(addr, sizeof(T), &data);
-    if (auto page_pointer{GetPointer(addr)}; page_pointer) {
-        std::memcpy(page_pointer, &data, sizeof(T));
-        return;
-    }
-
-    ASSERT(false);
+    Common::WritePagedScalar(addr, data, [&](GPUVAddr address) {
+        u8* page_pointer = GetPointer(address);
+        if (!page_pointer) {
+            // A Switch 2 sparse block nobody wrote yet gets its memory now (the whole scalar,
+            // a second block too if it straddles one).
+            Tegra::Nx2BackSparseWrite(addr, sizeof(T), &data);
+            page_pointer = GetPointer(address);
+            ASSERT(page_pointer != nullptr);
+        }
+        return page_pointer;
+    });
 }
 
 template u8 MemoryManager::Read<u8>(GPUVAddr addr) const;
@@ -761,6 +759,9 @@ bool MemoryManager::IsContinuousRange(GPUVAddr gpu_addr, std::size_t size) const
 }
 
 bool MemoryManager::IsFullyMappedRange(GPUVAddr gpu_addr, std::size_t size) const {
+    if (!IsWithinGPUAddressRange(gpu_addr) || size > address_space_size - gpu_addr) {
+        return false; // MemoryOperation skips such a range without calling the unmapped callback
+    }
     bool result{true};
     auto fail = [&]([[maybe_unused]] std::size_t page_index, [[maybe_unused]] std::size_t offset,
                     [[maybe_unused]] std::size_t copy_amount) {

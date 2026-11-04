@@ -112,7 +112,8 @@ TEST_CASE("Ampere geometry index conversion retains U16 truncation and FTZ",
     REQUIRE(((word >> 12) & 1) == 0);
     REQUIRE(((word >> 39) & 3) == 3);
     REQUIRE(((word >> 44) & 1) == 1);
-    for (const u32 bit : {0U, 8U, 13U, 18U, 22U, 27U}) {
+    // Bit 8 (bit 72) is the signed result, S16 instead of U16, and lowers too.
+    for (const u32 bit : {0U, 13U, 18U, 22U, 27U}) {
         auto invalid = convert;
         invalid.words[2] ^= 1U << bit;
         REQUIRE_FALSE(LowerToMaxwell(std::array{invalid, Exit}, true));

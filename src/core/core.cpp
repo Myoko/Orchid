@@ -25,6 +25,7 @@
 #include "core/cpu_manager.h"
 #include "core/debugger/debugger.h"
 #include "core/device_memory.h"
+#include "core/file_sys/content_archive.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
@@ -32,6 +33,7 @@
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/file_sys/savedata_factory.h"
+#include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs_concat.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/gpu_dirty_memory_manager.h"
@@ -68,6 +70,7 @@
 #include "hid_core/hid_core.h"
 #include "network/network.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -130,13 +133,14 @@ bool IsSwitch2Program(Core::System& system, const FileSys::VirtualFilesystem& vf
         if (nup.GetStatus() != Loader::ResultStatus::Success) {
             return false;
         }
+        // The ExeFS AppLoader_NUP boots: the update's over the base's, or a standalone update.
         std::optional<std::size_t> program;
-        if (const auto base = nup.FindBasePackage();
-            base && nup.GetExeFSDir(*base) != nullptr) {
-            program = base;
-        } else if (const auto update = nup.FindBestUpdatePackage();
-                   update && nup.GetExeFSDir(*update) != nullptr) {
+        if (const auto update = nup.FindBestUpdatePackage();
+            update && nup.GetExeFSDir(*update) != nullptr) {
             program = update;
+        } else if (const auto base = nup.FindBasePackage();
+                   base && nup.GetExeFSDir(*base) != nullptr) {
+            program = base;
         }
         const auto exefs = program ? nup.GetExeFSDir(*program) : nullptr;
         const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
@@ -173,7 +177,7 @@ struct System::Impl {
         device_memory.emplace();
 
         is_multicore = Settings::values.use_multi_core.GetValue();
-        extended_memory_layout = Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_4Gb;
+        memory_layout = Settings::values.memory_layout_mode.GetValue();
 
         core_timing.SetMulticore(is_multicore);
         core_timing.Initialize([&system]() { system.RegisterHostThread(); });
@@ -200,8 +204,9 @@ struct System::Impl {
         const bool must_reinitialize =
             !device_memory.has_value() ||
             is_multicore != Settings::values.use_multi_core.GetValue() ||
-            extended_memory_layout != (Settings::values.memory_layout_mode.GetValue() !=
-                                       Settings::MemoryLayout::Memory_4Gb);
+            // Any change of size: the device memory was made for the old one. Switch 2 titles force
+            // 12 GiB, and with 6-10 GiB configured the kernel handed out memory past its end.
+            memory_layout != Settings::values.memory_layout_mode.GetValue();
 
         if (!must_reinitialize) {
             return;
@@ -210,8 +215,7 @@ struct System::Impl {
         LOG_DEBUG(Kernel, "Re-initializing");
 
         is_multicore = Settings::values.use_multi_core.GetValue();
-        extended_memory_layout =
-            Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_4Gb;
+        memory_layout = Settings::values.memory_layout_mode.GetValue();
 
         Initialize(system);
     }
@@ -418,6 +422,9 @@ struct System::Impl {
 
         // Expose program id to dump sites and other global readers.
         Settings::SetCurrentProgramID(params.program_id);
+        // The per-title GPU decisions (Nx2NeedsBufferDownloads) need it before the first fence;
+        // the nvhost-ctrl-gpu query that also sets it may come later or not at all.
+        Tegra::g_nx2_program_id = params.program_id;
 
         // Track launch time for frontend launches
         LaunchTimestampCache::SaveLaunchTimestamp(params.program_id);
@@ -605,7 +612,7 @@ struct System::Impl {
     std::atomic_bool is_shutting_down{};
     std::atomic_bool is_powered_on{};
     bool is_multicore : 1 = false;
-    bool extended_memory_layout : 1 = false;
+    Settings::MemoryLayout memory_layout{Settings::MemoryLayout::Memory_4Gb};
     bool exit_locked : 1 = false;
     bool exit_requested : 1 = false;
     bool nvdec_active : 1 = false;

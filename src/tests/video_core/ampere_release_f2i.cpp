@@ -111,9 +111,15 @@ TEST_CASE("Ampere unflushed truncating F2I rejects reserved fields and modes",
     // |Rs| (bit 62) is applied by an FADD before the conversion.
     invalid[0].words[1] = 0x40000003;
     REQUIRE(static_cast<bool>(LowerToMaxwell(invalid)));
+    // |c| (bit 62) on a constant-buffer source: the same FADD, after the constant is loaded.
     invalid = RegisterTruncation;
     invalid[0].words = {0x00027b05, 0x40400400, 0x0020f000, 0x000e3000};
-    REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
+    const auto constant_abs = LowerToMaxwell(invalid);
+    REQUIRE(static_cast<bool>(constant_abs));
+    REQUIRE(constant_abs.instructions.size() > 1);
+    REQUIRE(constant_abs.instructions[1] ==
+            (0x5c58000000000000ULL | (7ULL << 16) | 249 | (252ULL << 8) | (255ULL << 20) |
+             (1ULL << 46)));
     invalid = RegisterTruncation;
     invalid[0].words = {0x00027d05, 5, 0x0020f000, 0x000e3000};
     REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));

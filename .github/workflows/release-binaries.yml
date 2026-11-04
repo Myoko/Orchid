@@ -13,11 +13,12 @@ on:
 permissions:
   contents: read
 
-# Clang major the Linux PGO build uses, from apt.llvm.org. A profile is written by a current clang
-# and an older reader refuses it, so this has to stay at or above whatever produced
-# eglantine.profdata; bump it when a refreshed profile needs a newer LLVM.
+# LLVM release the Linux PGO builds compile with (LLVM's own GitHub release). A profile is written
+# by a current clang and an older reader refuses it, so this has to stay at or above whatever
+# produced orchid.profdata (23.1.4 since 0.6.1); bump it when a refreshed profile needs a newer
+# LLVM.
 env:
-  PGO_LLVM_VERSION: '23'
+  PGO_LLVM_VERSION: "23.1.4"
 
 concurrency:
   group: release-binaries-${{ github.ref }}
@@ -77,7 +78,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       BUILD_TAG: ${{ needs.name.outputs.tag }}
-      ASSET_NAME: eglantine-${{ needs.name.outputs.tag }}-${{ matrix.platform }}
+      ASSET_NAME: orchid-${{ needs.name.outputs.tag }}-${{ matrix.platform }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
@@ -91,8 +92,8 @@ jobs:
           - platform: macos-arm64
             runner: macos-15
           # The -pgo builds are the same programs compiled by clang against the repo's
-          # eglantine.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
-          # Kart World ran at about half the speed of the normal build, with eglantine.profdata at
+          # orchid.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
+          # Kart World ran at about half the speed of the normal build, with orchid.profdata at
           # about the same speed. Windows uses MSYS2's MinGW clang like Eden does; MSVC cannot read
           # an LLVM .profdata file.
           - platform: linux-x86_64-pgo
@@ -135,7 +136,7 @@ jobs:
         if: startsWith(matrix.platform, 'linux') && runner.arch != 'ARM64'
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.3'
+          version: "6.8.3"
           host: linux
           target: desktop
           arch: linux_gcc_64
@@ -146,7 +147,7 @@ jobs:
         if: startsWith(matrix.platform, 'linux') && runner.arch == 'ARM64'
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.3'
+          version: "6.8.3"
           host: linux_arm64
           target: desktop
           arch: linux_gcc_arm64
@@ -173,23 +174,44 @@ jobs:
           modules: qtcharts
           cache: true
 
-      # Ubuntu's own clang 18 cannot read a profile from a current LLVM, so take clang from the LLVM
-      # apt repo. The versioned packages are named explicitly: that repo's unversioned clang/lld
-      # metapackages can lag the binaries they depend on and then resolve to nothing. lld-23 only
-      # ships ld.lld under /usr/lib/llvm-23/bin, so -B points the linker search there.
+      # Ubuntu's own clang 18 cannot read a profile from a current LLVM, so the -pgo builds take
+      # clang and lld from LLVM's release on GitHub. apt.llvm.org was tried first and failed both
+      # 0.6.1 runs: the runners could not resolve its name, even after retries. Only clang, lld (both
+      # statically linked against LLVM) and clang's headers are unpacked, about 500 MB, and they stay
+      # in the Actions cache, so later runs download nothing.
+      - name: Cache clang for PGO
+        if: startsWith(matrix.platform, 'linux') && matrix.pgo
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/llvm
+          key: pgo-llvm-${{ env.PGO_LLVM_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install clang for PGO
         if: startsWith(matrix.platform, 'linux') && matrix.pgo
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key |
-            sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$PGO_LLVM_VERSION main" |
-            sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            "clang-$PGO_LLVM_VERSION" "lld-$PGO_LLVM_VERSION"
-          "clang-$PGO_LLVM_VERSION" --version
+          llvm="$RUNNER_TEMP/llvm"
+          if [ ! -x "$llvm/bin/clang" ] || [ ! -x "$llvm/bin/ld.lld" ]; then
+            case "$RUNNER_ARCH" in
+              X64) arch=X64 ;;
+              ARM64) arch=ARM64 ;;
+              *) echo "::error::no LLVM release build for runner arch $RUNNER_ARCH"; exit 1 ;;
+            esac
+            name="LLVM-$PGO_LLVM_VERSION-Linux-$arch"
+            url="https://github.com/llvm/llvm-project/releases/download/llvmorg-$PGO_LLVM_VERSION/$name.tar.xz"
+            # Into a file first: a retried download piped straight into tar would hand it a broken
+            # stream.
+            curl -fL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/llvm.tar.xz" "$url"
+            rm -rf "$llvm" && mkdir -p "$llvm"
+            tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$llvm" --strip-components=1 --wildcards \
+              "$name/bin/clang" "$name/bin/clang++" "$name/bin/clang-[0-9]*" \
+              "$name/bin/lld" "$name/bin/ld.lld" "$name/lib/clang/*/include/*"
+            rm "$RUNNER_TEMP/llvm.tar.xz"
+          fi
+          echo "PGO_LLVM_ROOT=$llvm" >> "$GITHUB_ENV"
+          "$llvm/bin/clang" --version
+          "$llvm/bin/ld.lld" --version
 
       # The profile is in the source tree, where both the Linux and MSYS2 configure steps read it.
       - name: Check PGO profile
@@ -197,7 +219,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s eglantine.profdata
+          test -s orchid.profdata
 
       - name: Set up MSVC
         if: matrix.platform == 'windows-x86_64'
@@ -207,7 +229,7 @@ jobs:
         if: matrix.platform == 'windows-x86_64'
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.3'
+          version: "6.8.3"
           host: windows
           target: desktop
           arch: win64_msvc2022_64
@@ -295,20 +317,20 @@ jobs:
             -DVulkanHeaders_FORCE_BUNDLED=ON
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
             -DENABLE_UPDATE_CHECKER=ON
-            "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY"
-            "-DEGLANTINE_BUILD_TAG=$BUILD_TAG"
-            "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}"
+            "-DORCHID_UPDATE_REPO=$GITHUB_REPOSITORY"
+            "-DORCHID_BUILD_TAG=$BUILD_TAG"
+            "-DORCHID_BUILD_PLATFORM=${{ matrix.platform }}"
             -DUSE_DISCORD_PRESENCE=OFF
             -DUSE_CCACHE=ON
           )
           if [ '${{ matrix.pgo }}' = 'true' ]; then
             # Same flags Eden's CI passes for its clang PGO build.
-            profile="-fprofile-use=$PWD/eglantine.profdata -Wno-backend-plugin \
+            profile="-fprofile-use=$PWD/orchid.profdata -Wno-backend-plugin \
               -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
             flags+=(
-              "-DCMAKE_C_COMPILER=clang-$PGO_LLVM_VERSION"
-              "-DCMAKE_CXX_COMPILER=clang++-$PGO_LLVM_VERSION"
-              "-DCMAKE_EXE_LINKER_FLAGS=-B/usr/lib/llvm-$PGO_LLVM_VERSION/bin -fuse-ld=lld"
+              "-DCMAKE_C_COMPILER=$PGO_LLVM_ROOT/bin/clang"
+              "-DCMAKE_CXX_COMPILER=$PGO_LLVM_ROOT/bin/clang++"
+              "-DCMAKE_EXE_LINKER_FLAGS=-B$PGO_LLVM_ROOT/bin -fuse-ld=lld"
               "-DCMAKE_C_FLAGS=$profile"
               "-DCMAKE_CXX_FLAGS=$profile"
             )
@@ -336,9 +358,9 @@ jobs:
           -DVulkanHeaders_FORCE_BUNDLED=ON
           -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
           -DENABLE_UPDATE_CHECKER=ON
-          "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY"
-          "-DEGLANTINE_BUILD_TAG=$BUILD_TAG"
-          "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}"
+          "-DORCHID_UPDATE_REPO=$GITHUB_REPOSITORY"
+          "-DORCHID_BUILD_TAG=$BUILD_TAG"
+          "-DORCHID_BUILD_PLATFORM=${{ matrix.platform }}"
           -DUSE_DISCORD_PRESENCE=OFF
           -DUSE_CCACHE=ON
 
@@ -356,9 +378,9 @@ jobs:
           -DYUZU_USE_BUNDLED_QT=OFF
           -DYUZU_USE_BUNDLED_SDL3=ON
           -DENABLE_UPDATE_CHECKER=ON
-          "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY"
-          "-DEGLANTINE_BUILD_TAG=$BUILD_TAG"
-          "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}"
+          "-DORCHID_UPDATE_REPO=$GITHUB_REPOSITORY"
+          "-DORCHID_BUILD_TAG=$BUILD_TAG"
+          "-DORCHID_BUILD_PLATFORM=${{ matrix.platform }}"
           -DUSE_DISCORD_PRESENCE=OFF
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
@@ -370,7 +392,7 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+          profile="-fprofile-use=$(cygpath -m "$PWD/orchid.profdata") -Wno-backend-plugin \
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
           cmake -S . -B build/release -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -385,9 +407,9 @@ jobs:
             -DVulkanHeaders_FORCE_BUNDLED=ON \
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
             -DENABLE_UPDATE_CHECKER=ON \
-            "-DEGLANTINE_UPDATE_REPO=$GITHUB_REPOSITORY" \
-            "-DEGLANTINE_BUILD_TAG=$BUILD_TAG" \
-            "-DEGLANTINE_BUILD_PLATFORM=${{ matrix.platform }}" \
+            "-DORCHID_UPDATE_REPO=$GITHUB_REPOSITORY" \
+            "-DORCHID_BUILD_TAG=$BUILD_TAG" \
+            "-DORCHID_BUILD_PLATFORM=${{ matrix.platform }}" \
             -DUSE_DISCORD_PRESENCE=OFF \
             -DUSE_CCACHE=ON \
             -DCMAKE_C_COMPILER=clang \
@@ -435,10 +457,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/eglantine
+          test -x build/release/bin/orchid
           test -x build/release/bin/eden-cli
-          strip build/release/bin/eglantine build/release/bin/eden-cli
-          tar -czf "$ASSET_NAME.tar.gz" -C build/release/bin eglantine eden-cli licenses
+          strip build/release/bin/orchid build/release/bin/eden-cli
+          tar -czf "$ASSET_NAME.tar.gz" -C build/release/bin orchid eden-cli licenses
           test -s "$ASSET_NAME.tar.gz"
 
       # A self-contained AppImage: linuxdeploy bundles every library the two programs need except
@@ -449,7 +471,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/eglantine
+          test -x build/release/bin/orchid
           test -x build/release/bin/eden-cli
           tools="$RUNNER_TEMP/linuxdeploy"
           mkdir -p "$tools"
@@ -459,18 +481,18 @@ jobs:
           curl -fsSL -o "$tools/linuxdeploy-plugin-qt-$arch.AppImage" \
             "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$arch.AppImage"
           chmod +x "$tools"/*.AppImage
-          # The desktop file names its icon dev.eglantine.eglantine.
-          icon="$RUNNER_TEMP/dev.eglantine.eglantine.png"
-          cp dist/Eglantine.png "$icon"
+          # The desktop file names its icon dev.orchid.orchid.
+          icon="$RUNNER_TEMP/dev.orchid.orchid.png"
+          cp dist/Orchid.png "$icon"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
           export LDAI_OUTPUT="$ASSET_NAME.AppImage"
           export OUTPUT="$LDAI_OUTPUT"
           export ARCH="$arch"
-          mkdir -p AppDir/usr/share/licenses/eglantine
-          cp -R dist/licenses/. AppDir/usr/share/licenses/eglantine/
+          mkdir -p AppDir/usr/share/licenses/orchid
+          cp -R dist/licenses/. AppDir/usr/share/licenses/orchid/
           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
-            --executable build/release/bin/eglantine \
+            --executable build/release/bin/orchid \
             --executable build/release/bin/eden-cli \
             --desktop-file dist/dev.eden_emu.eden.desktop \
             --icon-file "$icon" \
@@ -483,12 +505,12 @@ jobs:
         if: matrix.platform == 'windows-x86_64'
         shell: pwsh
         run: |
-          foreach ($exe in 'eglantine.exe', 'eden-cli.exe') {
+          foreach ($exe in 'orchid.exe', 'eden-cli.exe') {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
           }
-          windeployqt --release --no-translations build/release/bin/eglantine.exe
+          windeployqt --release --no-translations build/release/bin/orchid.exe
 
       # A dynamic MinGW build is not portable on its own: windeployqt6 brings the Qt libraries and
       # plugins, then every non-system DLL the binaries and those plugins pull in gets copied next to
@@ -500,10 +522,10 @@ jobs:
           set -euo pipefail
           export PATH="/ucrt64/bin:$PATH"
           cd build/release/bin
-          test -f eglantine.exe
+          test -f orchid.exe
           test -f eden-cli.exe
           windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
-            --no-system-dxc-compiler --no-system-d3d-compiler eglantine.exe
+            --no-system-dxc-compiler --no-system-d3d-compiler orchid.exe
           deps() {
             objdump -p "$1" | awk '/DLL Name:/ {print $3}' | while read -r dll; do
               [ -z "$dll" ] && continue
@@ -519,7 +541,7 @@ jobs:
               fi
             done
           }
-          for exe in eglantine.exe eden-cli.exe; do
+          for exe in orchid.exe eden-cli.exe; do
             deps "$exe"
           done
           find . -name '*.dll' | while read -r dll; do
@@ -599,7 +621,7 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
-          pattern: eglantine-${{ needs.name.outputs.tag }}-*
+          pattern: orchid-${{ needs.name.outputs.tag }}-*
           path: artifacts
 
       - name: Package release files
@@ -655,13 +677,13 @@ jobs:
             cat <<'EOF'
           ## Install
 
-          Windows: extract the zip and run eglantine.exe, or eden-cli.exe from a terminal.
+          Windows: extract the zip and run orchid.exe, or eden-cli.exe from a terminal.
           Linux (AppImage): make it executable (chmod +x) and run it; it bundles its libraries and needs glibc 2.39 or newer (Ubuntu 24.04, Fedora 40, Debian 13, Arch).
-          Linux (tar.gz): extract it and run ./eglantine or ./eden-cli; it uses your system libraries, so Qt 6 and the usual libraries must be installed.
-          macOS: Apple Silicon and macOS 15 or newer. Extract the zip and move eglantine.app to Applications. The CLI is inside eglantine.app/Contents/MacOS/eden-cli. The app bundles Qt and MoltenVK and is ad-hoc signed, not notarized; macOS may require approval in Privacy & Security. macOS support remains experimental and uses the JIT, not NCE.
-          The -pgo builds are the same programs compiled with profile-guided optimization (clang plus the repo's eglantine.profdata) and run on the same CPUs; if one is slower than the normal build for you, please report it. The Windows PGO build is a MinGW build, so it carries its own DLLs and needs no Visual C++ redistributable.
+          Linux (tar.gz): extract it and run ./orchid or ./eden-cli; it uses your system libraries, so Qt 6 and the usual libraries must be installed.
+          macOS: Apple Silicon and macOS 15 or newer. Extract the zip and move orchid.app to Applications. The CLI is inside orchid.app/Contents/MacOS/eden-cli. The app bundles Qt and MoltenVK and is ad-hoc signed, not notarized; macOS may require approval in Privacy & Security. macOS support remains experimental and uses the JIT, not NCE.
+          The -pgo builds are the same programs compiled with profile-guided optimization (clang plus the repo's orchid.profdata) and run on the same CPUs; if one is slower than the normal build for you, please report it. The Windows PGO build is a MinGW build, so it carries its own DLLs and needs no Visual C++ redistributable.
 
-          Eglantine looks for newer builds of its channel at startup and from Help > Check for Updates.
+          Orchid looks for newer builds of its channel at startup and from Help > Check for Updates.
           EOF
           } > notes.md
           gh release create "$BUILD_TAG" dist/* \
@@ -670,3 +692,30 @@ jobs:
             $prerelease \
             --title "$title" \
             --notes-file notes.md
+
+  # Starts the next release: an issue lists what other Eglantine forks committed since the
+  # previous release and this branch lacks (tools/fork-scan.sh, routine in docs/ForkScan.md).
+  fork-scan:
+    name: Scan other forks
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Open the fork scan issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(git tag --merged HEAD --sort=-creatordate --list 'v*' | head -1)
+          tools/fork-scan.sh > scan.md
+          # Issue bodies hold 65536 characters.
+          head -c 60000 scan.md > body.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Fork scan after $tag" \
+            --label fork-scan --body-file body.md

@@ -10,6 +10,7 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
+#include "common/game_presets.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "frontend_common/settings_generator.h"
@@ -321,6 +322,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 constexpr int default_mouse_hide_timeout = 2500;
 constexpr int default_input_update_timeout = 1;
+constexpr int EmuThreadStopTimeoutMs = 10'000;
 
 constexpr size_t CopyBufferSize = 1_MiB;
 
@@ -1294,7 +1296,7 @@ void MainWindow::InitializeHotkeys() {
     hotkey_registry.LoadHotkeys();
 
     LinkActionShortcut(ui->action_Load_File, QStringLiteral("Load File"));
-    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Eglantine"));
+    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Orchid"));
     LinkActionShortcut(ui->action_Restart, QStringLiteral("Restart Emulation"));
     LinkActionShortcut(ui->action_Pause, QStringLiteral("Continue/Pause Emulation"));
     LinkActionShortcut(ui->action_Stop, QStringLiteral("Stop Emulation"));
@@ -1932,7 +1934,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (close_pending) {
         return;
     }
-    LOG_INFO(Frontend, "Eglantine starting...");
+    LOG_INFO(Frontend, "Orchid starting...");
 
     if (params.program_id == 0 ||
         params.program_id > static_cast<u64>(Service::AM::AppletProgramId::MaxProgramId)) {
@@ -1966,6 +1968,26 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtCommon::system->ApplySettings();
     }
 
+    if (title_id == Settings::MarioKartWorldProgramId && !asked_recommended_mkw_settings) {
+        asked_recommended_mkw_settings = true;
+        use_recommended_mkw_settings =
+            QMessageBox::question(
+                this, tr("Recommended Mario Kart World settings"),
+                tr("Use the recommended settings for Mario Kart World?\n\n"
+                   "Vulkan, 1x resolution, GPU Fast, asynchronous shaders, BC3, conservative VRAM, "
+                   "reactive flushing off, FIFO Relaxed VSync, handheld mode, ScaleForce, and "
+                   "FXAA.\n\n"
+                   "They apply to Mario Kart World until Orchid is closed. Your saved settings "
+                   "are not changed."),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+        LOG_INFO(Config, "MKW recommended settings accepted: {}", use_recommended_mkw_settings);
+    }
+    if (Settings::ApplyMarioKartWorldPreset(Settings::values, title_id,
+                                          use_recommended_mkw_settings)) {
+        QtCommon::system->ApplySettings();
+        Settings::UpdateGPUAccuracy();
+        LOG_INFO(Config, "Applied recommended MKW settings after per-game configuration");
+    }
     Settings::LogSettings();
 
     if (UISettings::values.select_user_on_boot && !user_flag_cmd_line) {
@@ -2211,6 +2233,23 @@ void MainWindow::OnShutdownBeginDialog() {
 void MainWindow::OnEmulationStopTimeExpired() {
     if (QtCommon::emu_thread) {
         QtCommon::emu_thread->ForceStop();
+        emu_terminate_timer.setSingleShot(true);
+        emu_terminate_timer.start(EmuThreadStopTimeoutMs);
+        connect(&emu_terminate_timer, &QTimer::timeout, this, &MainWindow::OnEmulationStopTimeout,
+                Qt::UniqueConnection);
+    }
+}
+
+void MainWindow::OnEmulationStopTimeout() {
+    TerminateEmulationThread();
+    OnEmulationStopped();
+}
+
+void MainWindow::TerminateEmulationThread() {
+    if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning()) {
+        LOG_ERROR(Frontend, "Emulation thread failed to stop, terminating it");
+        QtCommon::emu_thread->terminate();
+        QtCommon::emu_thread->wait();
     }
 }
 
@@ -2222,6 +2261,7 @@ void MainWindow::OnEmulationStopped() {
         return;
     }
     shutdown_timer.stop();
+    emu_terminate_timer.stop();
     if (QtCommon::emu_thread) {
         QtCommon::emu_thread->disconnect();
         QtCommon::emu_thread->wait();
@@ -2311,13 +2351,17 @@ void MainWindow::ShutdownGame() {
     play_time_manager->Stop();
     OnShutdownBegin();
     OnEmulationStopTimeExpired();
-    if (QtCommon::emu_thread) {
+    emu_terminate_timer.stop();
+    if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning()) {
         QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
         connect(QtCommon::emu_thread.get(), &QThread::finished, &loop, &QEventLoop::quit);
-        if (QtCommon::emu_thread->isRunning()) {
-            loop.exec(QEventLoop::ExcludeUserInputEvents);
-        }
+        connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+        timeout.start(EmuThreadStopTimeoutMs);
+        loop.exec(QEventLoop::ExcludeUserInputEvents);
     }
+    TerminateEmulationThread();
     OnEmulationStopped();
 }
 
@@ -2382,10 +2426,9 @@ void MainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target,
         }
     }();
 
-    const bool has_user_save{user_save_size > 0};
-    const bool has_device_save{device_save_size > 0};
-
-    ASSERT_MSG(has_user_save != has_device_save, "Game uses both user and device savedata?");
+    // Some titles (e.g. NX2 games) report no sizes in their NACP yet still create account saves
+    // at runtime, so only use the device layout when it is explicitly declared.
+    const bool use_device_save{device_save_size > 0 && user_save_size == 0};
 
     switch (target) {
     case GameListOpenTarget::SaveData: {
@@ -2394,26 +2437,23 @@ void MainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target,
         auto vfs_save_dir = QtCommon::vfs->OpenDirectory(Common::FS::PathToUTF8String(save_dir),
                                                          FileSys::OpenMode::Read);
 
-        if (has_user_save) {
-            // User save data
+        u128 save_user_id{};
+        if (!use_device_save) {
             const auto user_id = GetProfileID();
-            assert(user_id);
-
-            const auto user_save_data_path = FileSys::SaveDataFactory::GetFullPath(
-                {}, vfs_save_dir, FileSys::SaveDataSpaceId::User, FileSys::SaveDataType::Account,
-                program_id, user_id->AsU128(), 0);
-
-            path = Common::FS::ConcatPathSafe(save_dir, user_save_data_path);
-        } else {
-            // Device save data
-            const auto device_save_data_path = FileSys::SaveDataFactory::GetFullPath(
-                {}, vfs_save_dir, FileSys::SaveDataSpaceId::User, FileSys::SaveDataType::Account,
-                program_id, {}, 0);
-
-            path = Common::FS::ConcatPathSafe(save_dir, device_save_data_path);
+            if (user_id) {
+                save_user_id = user_id->AsU128();
+            }
         }
 
-        if (!Common::FS::CreateDirs(path)) {
+        const auto save_data_path = FileSys::SaveDataFactory::GetFullPath(
+            {}, vfs_save_dir, FileSys::SaveDataSpaceId::User, FileSys::SaveDataType::Account,
+            program_id, save_user_id, 0);
+
+        path = Common::FS::ConcatPathSafe(save_dir, save_data_path);
+
+        // Only create the folder for games that are known to need it; otherwise an empty
+        // directory would be left behind in the wrong place.
+        if ((user_save_size > 0 || device_save_size > 0) && !Common::FS::CreateDirs(path)) {
             LOG_ERROR(Frontend, "Unable to create the directories for save data");
         }
 
@@ -4701,7 +4741,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Eglantine to apply the X11 backend."));
+                                 tr("Restart Orchid to apply the X11 backend."));
     }
 }
 #endif
@@ -4820,8 +4860,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Eglantine?");
-    return question(this, tr("Eglantine"), text);
+    const auto text = tr("Are you sure you want to close Orchid?");
+    return question(this, tr("Orchid"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -4927,7 +4967,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Eglantine"),
+        this, tr("Orchid"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -4936,10 +4976,10 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Eglantine to not exit.\n\n"
+    const auto text = tr("The currently running application has requested Orchid to not exit.\n\n"
                          "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Eglantine"), text);
+    return question(this, tr("Orchid"), text);
 }
 
 void MainWindow::RequestGameExit() {

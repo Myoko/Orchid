@@ -11,11 +11,11 @@
    </rect>
   </property>
   <property name="windowTitle">
-  <string>Eglantine</string>
+  <string>Orchid</string>
   </property>
   <property name="windowIcon">
    <iconset resource="yuzu.qrc">
-    <normaloff>:/img/eglantine.ico</normaloff>:/img/eglantine.ico</iconset>
+    <normaloff>:/img/orchid.ico</normaloff>:/img/orchid.ico</iconset>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::TabShape::Rounded</enum>
@@ -59,7 +59,7 @@
     </widget>
     <widget class="QMenu" name="menuOpen_Eden_Folders">
      <property name="title">
-      <string>Open &amp;Eglantine Folders</string>
+      <string>Open &amp;Orchid Folders</string>
      </property>
      <addaction name="action_Root_Data_Folder"/>
      <addaction name="action_NAND_Folder"/>
@@ -298,7 +298,7 @@
   </action>
   <action name="action_About">
    <property name="text">
-    <string>&amp;About Eglantine</string>
+    <string>&amp;About Orchid</string>
    </property>
   </action>
   <action name="action_Single_Window_Mode">
@@ -561,7 +561,7 @@
   </action>
   <action name="action_Eden_Dependencies">
    <property name="text">
-    <string>&amp;Eglantine Dependencies</string>
+    <string>&amp;Orchid Dependencies</string>
    </property>
   </action>
   <action name="action_Data_Manager">

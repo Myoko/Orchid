@@ -5,7 +5,7 @@
 - Built-in font allocation failures are handled cleanly (10d3274)
 
 ### Updater
-- Eglantine now checks this repository's GitHub releases for updates (Help > Check for Updates), CI builds are named `<branch>-build-<run>`, and the updater shows the commits since your build (#6)
+- Orchid now checks this repository's GitHub releases for updates (Help > Check for Updates), CI builds are named `<branch>-build-<run>`, and the updater shows the commits since your build (#6)
 
 ### GPU / Shader recompiler
 - Experimental NV cooperative-matrix (tensor) lowering, guarded behind a gate; also fixes a purple rendering bug (#5)
@@ -19,4 +19,4 @@
 ### Misc
 - Removed leftover AI-agent files and CODEOWNERS from the repository (62d8525)
 
-**Full changes:** https://github.com/MythosOfs/Eglantine/compare/build-2...mario-tennis-fever-build-3
+**Full changes:** https://github.com/MythosOfs/Orchid/compare/build-2...mario-tennis-fever-build-3

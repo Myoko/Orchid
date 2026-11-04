@@ -31,7 +31,7 @@ public:
         using Result = std::invoke_result_t<Function>;
         auto task = std::make_shared<std::packaged_task<Result()>>([&]() -> Result {
             Nx2GpuCommandScope scope{false};
-            scope.submit = [](std::function<void()>&& work) { work(); };
+            scope.submit = [](std::function<void()>&& work, bool) { work(); };
             return scope.Invoke(std::forward<Function>(function));
         });
         auto result = task->get_future();
@@ -42,22 +42,36 @@ public:
     Nx2GpuCommandScope(const Nx2GpuCommandScope&) = delete;
     Nx2GpuCommandScope& operator=(const Nx2GpuCommandScope&) = delete;
 
+    /// `map`: the command maps GPU memory, so its batch goes through MapInOrder (with the GPU
+    /// split it runs before the front reads later command lists). Fakes without it use RunInOrder.
     template <typename GPU>
-    static void Run(GPU& gpu, std::function<void()>&& command) {
+    static void Run(GPU& gpu, std::function<void()>&& command, bool map = false) {
         if (!current) {
-            gpu.RunInOrder(std::move(command));
+            Submit(gpu, std::move(command), map);
             return;
         }
         auto& scope = *current->root;
         if (!scope.submit) {
-            scope.submit = [&gpu](std::function<void()>&& work) {
-                gpu.RunInOrder(std::move(work));
+            scope.submit = [&gpu](std::function<void()>&& work, bool front) {
+                Submit(gpu, std::move(work), front);
             };
         }
+        scope.map |= map;
         scope.commands->push_back(std::move(command));
     }
 
 private:
+    template <typename GPU>
+    static void Submit(GPU& gpu, std::function<void()>&& work, bool map) {
+        if constexpr (requires { gpu.MapInOrder(std::move(work)); }) {
+            if (map) {
+                gpu.MapInOrder(std::move(work));
+                return;
+            }
+        }
+        gpu.RunInOrder(std::move(work));
+    }
+
     template <typename Function>
     auto Invoke(Function&& function) {
         try {
@@ -103,7 +117,7 @@ private:
         published = true;
         current = previous;
         if (!commands->empty()) {
-            submit(std::move(batch));
+            submit(std::move(batch), map);
         }
     }
 
@@ -113,7 +127,8 @@ private:
     Nx2GpuCommandScope* previous;
     Nx2GpuCommandScope* root;
     bool published{};
-    std::function<void(std::function<void()>&&)> submit;
+    bool map{};
+    std::function<void(std::function<void()>&&, bool)> submit;
     std::shared_ptr<std::vector<std::function<void()>>> commands;
     std::function<void()> batch;
 };

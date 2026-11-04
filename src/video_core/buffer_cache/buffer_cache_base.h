@@ -61,6 +61,7 @@ constexpr u32 NUM_VERTEX_BUFFERS = 32;
 constexpr u32 NUM_TRANSFORM_FEEDBACK_BUFFERS = 4;
 constexpr u32 NUM_GRAPHICS_UNIFORM_BUFFERS = 18;
 constexpr u32 NUM_COMPUTE_UNIFORM_BUFFERS = 8;
+// Native compute shaders bind up to 18 global memory ranges; the enable masks are 32 bits wide.
 constexpr u32 NUM_STORAGE_BUFFERS = Shader::Info::MAX_SSBOS;
 constexpr u32 NUM_COMPUTE_STORAGE_BUFFERS = Shader::Info::MAX_SSBOS;
 constexpr u32 NUM_TEXTURE_BUFFERS = 32;
@@ -239,6 +240,9 @@ public:
     void ResolveMultiRangeStorage(Binding& binding, bool is_written,
                                   std::vector<MultiRangeSegment>& pool);
 
+    /// Finds buffers again for segments whose buffer a later lookup deleted (merged away).
+    void RefreshMultiRangeSegments(std::span<MultiRangeSegment> pool);
+
     void UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size);
 
     void WriteMemory(DAddr device_addr, u64 size);
@@ -376,6 +380,15 @@ public:
         return current_draw_indirect && !current_draw_indirect->is_indexed &&
                !current_draw_indirect->include_count && !current_draw_indirect->is_byte_count &&
                maxwell3d->draw_manager.draw_state.topology == Maxwell::PrimitiveTopology::Quads;
+    }
+
+    /// A single non-indexed indirect draw, or a quad one. Backends without quads check its record
+    /// on the GPU first: it can hold words the guest GPU never wrote.
+    [[nodiscard]] bool IsArrayIndirectDraw() const {
+        return IsQuadIndirectDraw() ||
+               (current_draw_indirect && !current_draw_indirect->is_indexed &&
+                !current_draw_indirect->include_count && !current_draw_indirect->is_byte_count &&
+                current_draw_indirect->max_draw_counts == 1);
     }
 
     template <typename Func>
@@ -540,6 +553,13 @@ private:
 
     void UpdateVertexBufferSlot(u32 index, const Binding& binding);
 
+    /// Flags the vertex buffers overlapping a written range so host copies derived from them are
+    /// rebuilt.
+    void MarkVertexBuffersStale(DAddr device_addr, u64 size);
+
+    /// Re-dirties repacked vertex buffers whose source data was written since they were bound.
+    void RefreshRepackedVertexBuffers();
+
     void ClearDownload(DAddr base_addr, u64 size);
 
     void InlineMemoryImplementation(DAddr dest_address, size_t copy_size,
@@ -560,6 +580,7 @@ private:
     u32 last_index_count = 0;
 
     u32 enabled_vertex_buffers_mask = 0;
+    u32 stale_vertex_buffers_mask = 0;
     u64 vertex_buffers_serial = 0;
     std::array<Binding, 32> v_buffer{};
 

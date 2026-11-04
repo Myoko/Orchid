@@ -60,9 +60,10 @@ class VertexRepackPass final : public ComputePass {
 public:
     VertexRepackPass(const Device& device, Scheduler& scheduler, DescriptorPool& descriptor_pool,
                      StagingBufferPool& staging_pool, ComputePassDescriptorQueue& descriptor_queue);
-    /// Returns nothing when the range exceeds the device limits; the binding is then left as is.
-    std::optional<std::pair<VkBuffer, VkDeviceSize>> Assemble(VkBuffer source, u32 offset,
-                                                              u32 size);
+    /// Returns nothing when the range exceeds the device limits or the source buffer; the binding
+    /// is then left as is.
+    std::optional<std::pair<VkBuffer, VkDeviceSize>> Assemble(VkBuffer source, u32 offset, u32 size,
+                                                              u64 buffer_size);
 
 private:
     Scheduler& scheduler;
@@ -113,7 +114,8 @@ public:
                               StagingBufferPool& staging_buffer_pool_,
                               ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
 
-    /// Turns the non-indexed indirect quad draw at src into indexed draw arguments for the quad
+    /// Checks the non-indexed indirect draw at src (a corrupt one draws nothing) and copies it,
+    /// or with max_vertices set turns the quad draw into indexed draw arguments for the quad
     /// index buffer, with at most max_vertices vertices. Returns where the arguments are.
     std::pair<VkBuffer, VkDeviceSize> Convert(VkBuffer src_buffer, u32 src_offset,
                                               u32 max_vertices);

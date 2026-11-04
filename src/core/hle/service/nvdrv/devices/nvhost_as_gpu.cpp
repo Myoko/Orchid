@@ -256,7 +256,7 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
     nx2_gpu_views.Map(gpu_address, cpu_address, size);
     Nx2GpuCommandScope::Run(system.GPU(), [gmmu = gmmu.get(), gpu_address, device_address, size] {
         gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
-    });
+    }, true); // map: before later command lists are read
     LOG_DEBUG(Service_NVDRV, "Switch 2 GPU mapping {:#x}+{:#x} -> CPU {:#x}", gpu_address, size,
               cpu_address);
     prepared->Commit();
@@ -336,7 +336,7 @@ void nvhost_as_gpu::Nx2Sparse(u64 gpu_address, u64 size, bool create) {
     nx2_sparse_ranges[gpu_address] = {size, device_address};
     Nx2GpuCommandScope::Run(system.GPU(), [gmmu = gmmu.get(), gpu_address, device_address, size] {
         gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
-    });
+    }, true); // map: before later command lists are read
     LOG_DEBUG(Service_NVDRV, "Switch 2 sparse region {:#x}+{:#x} -> device {:#x}", gpu_address,
               size, device_address);
 }
@@ -390,7 +390,7 @@ void nvhost_as_gpu::Nx2Reserve(u64 gpu_address, u64 size) {
         } else {
             gmmu->Unmap(gpu_address, size);
         }
-    });
+    }, true); // map: before later command lists are read
 }
 
 void nvhost_as_gpu::OnClose(DeviceFD fd) {}

@@ -597,8 +597,9 @@ void KeplerCompute::DescribeNativeResources(const NativeQmdScheduler::Descriptor
 std::atomic<u32> g_nx2_trace_draws_after_upscale{};
 
 // Fire Emblem: Fortune's Weave's first DLSS pass (rejected, before the network) has the input colour
-// at cbuf0+0x278, its motion vectors (R16G16 float, the input's size) at +0x290 and this frame's
-// camera jitter (x, y; input pixels, Halton bases 2 and 3 less 0.5) at +0x1b0.
+// at cbuf0+0x278, its motion vectors (R16G16 float, the input's size) at +0x290, its depth (Z32, the
+// input's size) at +0x298 and this frame's camera jitter (x, y; input pixels, Halton bases 2 and 3
+// less 0.5) at +0x1b0.
 void KeplerCompute::RememberDlssMotionVectors() {
     const auto& cbuf = launch_description.const_buffer_config[0];
     if (cbuf.size.Value() < 0x294) return;
@@ -616,6 +617,14 @@ void KeplerCompute::RememberDlssMotionVectors() {
         return;
     dlss_motion_vectors = *motion;
     dlss_motion_color = color->Address();
+    const auto depth = cbuf.size.Value() >= 0x29c ? image(0x298) : std::nullopt;
+    if (depth && depth->format == Texture::TextureFormat::Z32 && depth->Address() != 0 &&
+        depth->Width() == color->Width() && depth->Height() == color->Height() &&
+        depth->IsBlockLinear()) {
+        dlss_depth = *depth;
+    } else {
+        dlss_depth.reset();
+    }
     dlss_jitter = {std::bit_cast<f32>(memory_manager.Read<u32>(cbuf_address + 0x1b0)),
                    std::bit_cast<f32>(memory_manager.Read<u32>(cbuf_address + 0x1b4))};
 }
@@ -699,8 +708,32 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         result.addr_lower = static_cast<u32>(tic.Address());
         return result;
     };
+    // Title 4's program ends by decoding its result from sRGB to linear (the 0.04045 threshold
+    // and the 2.4 exponent as half-precision immediates of HSETP2 and HMUL2). The copy of its
+    // sRGB input left the frame gamma-encoded twice, washed out: decode in the copy when the
+    // program does.
+    static std::unordered_map<GPUVAddr, bool> decodes_srgb;
+    const GPUVAddr program = regs.code_loc.Address();
+    const auto [known, inserted] = decodes_srgb.try_emplace(program, false);
+    if (inserted) {
+        bool threshold = false, exponent = false;
+        std::array<u32, 0x400> block{};
+        for (u64 offset = 0; offset < 0x20000 && !(threshold && exponent); offset += sizeof(block)) {
+            if (!memory_manager.IsFullyMappedRange(program + offset, sizeof(block))) break;
+            memory_manager.ReadBlock(program + offset, block.data(), sizeof(block));
+            for (size_t word = 0; word < block.size(); word += 4) {
+                const u32 opcode = block[word] & 0xfff;
+                threshold |= opcode == 0x434 && block[word + 1] == 0x292d292d;
+                exponent |= opcode == 0x832 && block[word + 1] == 0x40cc40cc;
+            }
+        }
+        known->second = threshold && exponent;
+        LOG_INFO(HW_GPU, "Upscale fallback for program {:#x}: {}", program,
+                 known->second ? "decodes sRGB like the program" : "plain copy");
+    }
     const Fermi2D::Config config{
-        .operation = Fermi2D::Operation::SrcCopy,
+        .operation = known->second ? Fermi2D::Operation::SrcCopySrgbToLinear
+                                   : Fermi2D::Operation::SrcCopy,
         .filter = Fermi2D::Filter::Bilinear,
         .must_accelerate = true,
         .dst_x0 = 0,
@@ -712,10 +745,11 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         .src_x1 = static_cast<s32>(input->Width()),
         .src_y1 = static_cast<s32>(input->Height()),
     };
-    // Debug: does the input hold anything? Download it once and count non-zero words.
+    // Debug (EDEN_NX2_SAMPLE_AT=<n>): at the n-th upscale, download the input, output and targets
+    // and count non-zero words. Off by default: the downloads froze Donkey Kong Bananza for ~1.3 s.
     static const u32 sample_at = [] {
         const char* value = std::getenv("EDEN_NX2_SAMPLE_AT");
-        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 20U;
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : ~0U;
     }();
     if (static u32 sampled{}; sampled++ == sample_at) {
         const auto sample = [&](const Texture::TICEntry& tic) {
@@ -784,8 +818,9 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
             return false;
         Fermi2D::Surface motion = surface(*dlss_motion_vectors);
         motion.format = RTFormat::R16G16_FLOAT;
-        return rasterizer->AccelerateTemporalUpscale(source, surface(*output), motion, dlss_jitter,
-                                                     {1.0f, 1.0f});
+        return rasterizer->AccelerateTemporalUpscale(source, surface(*output), motion,
+                                                     dlss_depth ? &*dlss_depth : nullptr,
+                                                     dlss_jitter, {1.0f, 1.0f});
     };
     const bool done = upscale_temporally() ||
                       rasterizer->AccelerateSurfaceCopy(source, surface(*output), config);
@@ -808,9 +843,9 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     // Debug: trace the draws that follow one upscale (EDEN_NX2_RT_TRACE_AFTER_UPSCALE).
     static const u32 trace_at = [] {
         const char* value = std::getenv("EDEN_NX2_TRACE_AFTER_UPSCALE");
-        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 30U;
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
     }();
-    if (static u32 count{}; ++count == trace_at) g_nx2_trace_draws_after_upscale = 40;
+    if (static u32 count{}; trace_at != 0 && ++count == trace_at) g_nx2_trace_draws_after_upscale = 40;
     static u32 logged{};
     if (logged++ < 4) {
         LOG_INFO(HW_GPU, "Upscale fallback {:#x} {}x{} block {}/{}/{} -> {:#x} {}x{} block {}/{}/{} levels {}: {}",

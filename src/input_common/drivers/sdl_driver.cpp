@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: 2018 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <numbers>
 #include "common/logging.h"
@@ -115,7 +116,15 @@ public:
             }
         }
 
-        LOG_INFO(Input, "Controller motion capabilities: accel={} gyro={}", has_accel, has_gyro);
+        // EnableMotion is also called to recover a stalled sensor, so only log when the reported
+        // capabilities actually change instead of on every restart.
+        if (!motion_capabilities_logged || logged_accel != has_accel || logged_gyro != has_gyro) {
+            LOG_INFO(Input, "Controller motion capabilities: accel={} gyro={}", has_accel,
+                     has_gyro);
+            motion_capabilities_logged = true;
+            logged_accel = has_accel;
+            logged_gyro = has_gyro;
+        }
     }
 
     bool HasMotion() const {
@@ -133,6 +142,10 @@ public:
             return false;
         }
         if (sensor_timestamp < last_motion_update) {
+            // Sensor timestamps are relative to the device session and restart from zero when
+            // the controller reconnects; take a new baseline instead of dropping motion until
+            // the old value is passed again.
+            last_motion_update = sensor_timestamp;
             return false;
         }
 
@@ -163,16 +176,21 @@ public:
         // Motion data is invalid
         if (motion.accel_x == 0 && motion.gyro_x == 0 && motion.accel_y == 0 &&
             motion.gyro_y == 0 && motion.accel_z == 0 && motion.gyro_z == 0) {
-            if (motion_error_count++ < 200) {
+            if (motion_error_count++ < motion_restart_threshold) {
                 return false;
             }
-            // Try restarting the sensor
+            // Try restarting the sensor. Back off exponentially so a sensor that keeps reporting
+            // zeros (observed on the Steam Deck) isn't toggled several times a
+            // second for the whole session.
             motion_error_count = 0;
+            motion_restart_threshold =
+                std::min(motion_restart_threshold * 2, MaxMotionRestartThreshold);
             EnableMotion();
             return false;
         }
 
         motion_error_count = 0;
+        motion_restart_threshold = InitialMotionRestartThreshold;
         motion.delta_timestamp = time_difference;
         return true;
     }
@@ -292,6 +310,14 @@ public:
     }
 
     void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller) {
+        if (joystick != nullptr) {
+            // A reopened device starts a new sensor timestamp session.
+            std::scoped_lock lock{mutex};
+            last_motion_update = 0;
+            motion = {};
+            motion_error_count = 0;
+            motion_restart_threshold = InitialMotionRestartThreshold;
+        }
         sdl_joystick.reset(joystick);
         sdl_controller.reset(controller);
     }
@@ -393,7 +419,13 @@ private:
     mutable std::mutex mutex;
 
     u64 last_motion_update{};
+    static constexpr std::size_t InitialMotionRestartThreshold = 200;
+    static constexpr std::size_t MaxMotionRestartThreshold = 200 * 64;
     std::size_t motion_error_count{};
+    std::size_t motion_restart_threshold{InitialMotionRestartThreshold};
+    bool motion_capabilities_logged{false};
+    bool logged_accel{false};
+    bool logged_gyro{false};
     bool has_gyro{false};
     bool has_accel{false};
     bool has_vibration{false};

@@ -5,12 +5,15 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <new>
+#include <utility>
 
 #include "common/polyfill_thread.h"
 
@@ -25,6 +28,17 @@ class SPSCQueue {
     static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two.");
 
 public:
+    SPSCQueue() = default;
+
+    // Producer and consumer must be stopped before destruction. Only queued slots hold live
+    // T objects: a popped slot is destroyed before the producer may reuse it.
+    ~SPSCQueue() {
+        const auto end = producer.index.load(std::memory_order_relaxed);
+        for (auto index = consumer.index.load(std::memory_order_relaxed); index != end; ++index) {
+            std::destroy_at(std::addressof(m_data[index % Capacity].value));
+        }
+    }
+
     template <typename... Args>
     bool TryEmplace(Args&&... args) noexcept {
         return Emplace<PushMode::Try>(std::forward<Args>(args)...);
@@ -109,7 +123,7 @@ private:
         // Determine the position to write to.
         const std::size_t pos = write_index % Capacity;
         // Emplace into the queue.
-        std::construct_at(std::addressof(m_data[pos]), std::forward<Args>(args)...);
+        std::construct_at(std::addressof(m_data[pos].value), std::forward<Args>(args)...);
         // Increment the write index.
         ++producer.index;
         // Notify the consumer that we have pushed into the queue.
@@ -147,7 +161,10 @@ private:
         // Determine the position to read from.
         const std::size_t pos = read_index % Capacity;
         // Pop the data off the queue, moving it.
-        t = std::move(m_data[pos]);
+        t = std::move(m_data[pos].value);
+        // A move need not release everything the source owns: destroy it before the slot is
+        // handed back to the producer, which constructs the next value in place.
+        std::destroy_at(std::addressof(m_data[pos].value));
         // Increment the read index.
         ++consumer.index;
         // Notify the producer that we have popped off the queue.
@@ -156,7 +173,12 @@ private:
         return true;
     }
 
-    std::array<T, Capacity> m_data;
+    union Slot {
+        Slot() noexcept {}
+        ~Slot() {}
+        T value;
+    };
+    std::array<Slot, Capacity> m_data;
     alignas(64) struct {
         std::atomic_size_t index{0};
         std::condition_variable_any cv;

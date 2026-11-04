@@ -9,23 +9,23 @@
 
 <h1 align="center">
   <br>
-  <img src="https://github.com/user-attachments/assets/35031845-4bfa-4916-8bf5-bc3bce67d5e2" alt="Eglantine" width="200">
+  <img src="dist/Orchid.png" alt="Orchid" width="200">
   <br>
-  <b>Eglantine (MythosOfs fork)</b>
+  <b>Orchid</b>
   <br>
 </h1>
 
-<h4 align="center">A very experimental Switch 2 emulator. This fork builds on
-<a href="https://github.com/zortos293/Eglantine">zortos293/Eglantine</a> and carries fixes aimed at
+<h4 align="center">A very experimental Switch 2 emulator. Orchid started from
+<a href="https://github.com/zortos293/Eglantine">Eglantine</a> and has grown into its own project, with fixes aimed at
 Mario Tennis Fever first, plus the shader, kernel and graphics work other games need.</h4>
 
 > [!NOTE]
-> This is an unofficial fork. Problems with these builds are not caused by the zortos293, Eglantine
+> Orchid is an independent project. Problems with these builds are not caused by the Eglantine
 > or Eden developers, so please do not report them there.
 
 <p align="center">
   <a href="#branches-and-builds">Branches and builds</a> |
-  <a href="#what-this-fork-changes">What this fork changes</a> |
+  <a href="#what-orchid-adds">What Orchid adds</a> |
   <a href="#download">Download</a> |
   <a href="#build-the-newest-commit-yourself">Build it yourself</a> |
   <a href="#documentation">Documentation</a> |
@@ -45,9 +45,9 @@ Commits land often, but they do not start a build. Release builds are started by
 (Actions > release-binaries > Run workflow), so the newest release can be several commits behind
 its branch. To run the newest commit, [build it yourself](#build-the-newest-commit-yourself).
 
-## What this fork changes
+## What Orchid adds
 
-Compared with zortos293/Eglantine:
+Compared with the Eglantine it started from:
 
 - **Mario Tennis Fever:** startup crash fixed, the NVIDIA crash at match start fixed, and per-game
   defaults (low GPU accuracy, balanced fences).
@@ -66,18 +66,18 @@ Compared with zortos293/Eglantine:
 
 ## Download
 
-Releases are on the [releases page](https://github.com/MythosOfs/Eglantine/releases). Each one has:
+Releases are on the [releases page](https://github.com/MythosOfs/Orchid/releases). Each one has:
 
 | File | For |
 |---|---|
-| `eglantine-<version>-linux-x86_64-pgo.AppImage` | Linux, profile-guided build (preferred) |
-| `eglantine-<version>-linux-x86_64.AppImage` | Linux |
-| `eglantine-<version>-windows-x86_64-pgo.zip` | Windows, profile-guided MinGW build (preferred) |
-| `eglantine-<version>-windows-x86_64.zip` | Windows |
-| `eglantine-<version>-macos-arm64.zip` | macOS 15+ on Apple Silicon, experimental |
+| `orchid-<version>-linux-x86_64-pgo.AppImage` | Linux, profile-guided build (preferred) |
+| `orchid-<version>-linux-x86_64.AppImage` | Linux |
+| `orchid-<version>-windows-x86_64-pgo.zip` | Windows, profile-guided MinGW build (preferred) |
+| `orchid-<version>-windows-x86_64.zip` | Windows |
+| `orchid-<version>-macos-arm64.zip` | macOS 15+ on Apple Silicon, experimental |
 
 Linux: `chmod +x` the AppImage and run it; it needs glibc 2.39 or newer. Windows: extract the zip
-and run `eglantine.exe`.
+and run `orchid.exe`.
 
 ## Build the newest commit yourself
 
@@ -95,12 +95,12 @@ Ubuntu 26.04, Debian 13 and other distributions: see [docs/Deps.md](docs/Deps.md
 Clone `main`, configure and build:
 
 ```sh
-git clone https://github.com/MythosOfs/Eglantine.git
-cd Eglantine
+git clone https://github.com/MythosOfs/Orchid.git
+cd Orchid
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DYUZU_TESTS=OFF \
   -DVulkanHeaders_FORCE_BUNDLED=ON -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
 cmake --build build
-./build/bin/eglantine
+./build/bin/orchid
 ```
 
 Later, to move to the newest commit (only changed files get rebuilt):
@@ -122,9 +122,41 @@ update checker; `git pull` is the update. Windows (MSVC) and macOS builds are de
 - [Fire Emblem: Fortune's Weave bring-up notes](docs/FE_FORTUNES_WEAVE.md)
 - [Switch 2 loading notes](NX2_NOTES.md)
 - [Development tools](tools)
+- [Fork scan: taking fixes from Eglantine forks](docs/ForkScan.md)
+
+## Credits
+
+Orchid takes fixes from Eglantine and its forks; after every release
+[tools/fork-scan.sh](docs/ForkScan.md) lists what they fixed since. Each ported commit names its
+source and author in its message.
+
+- [zortos293/Eglantine](https://github.com/zortos293/Eglantine) (Zortos), the project Orchid
+  started from: paged scalar guest memory access, SPSCQueue value lifetime, timed Event waits on
+  Windows, GPU teardown order, buffer cache and query fixes, the separate pipeline cache file names.
+  Radu Ursache: no mesh pipelines without `VK_EXT_mesh_shader`.
+- [Djihads80/Eglantine](https://github.com/Djihads80/Eglantine) and its contributors: merged
+  regularly. Idle staging buffers freed (Takoroka), the RangeSet empty-query guard (néo Luigi),
+  test fixes (kraibse).
+- [Selevet Eglantine](https://github.com/sylvieistaken/selevet-eglantine) (sylvieistaken): the
+  windowed GPU mapping table diff, hot loop shortcuts, F2I, local spill and texture query lowering,
+  device memory rebuild on layout changes, decoder end of stream, Windows commit retries, and the
+  GPU wait knobs (`EDEN_NX2_GPU_WAIT_SPIN_US`, `EDEN_NX2_BACK_SPIN`, `EDEN_NX2_ACQUIRE_QUEUED`,
+  `EDEN_NX2_SWAP_STABLE`, `EDEN_NX2_AVX512`).
+- [PokeDinner](https://git.eden-emu.dev/Franseven/PokeDinner-a-Eglantine-Fork) (Franseven,
+  [mirror](https://github.com/Apollo422/PokeDinner)), partly from Eden-NS2: any cache hint on
+  native LDG, SUST with a partial channel mask, `EDEN_AUTO_BUTTONS`.
+- Forks of those: Dee1, Greencus and exploitizm (audio manager lifetime, macro binds past the
+  start table), LucyferDev (A64 saturating shift and multiply-accumulate instructions), FZout (page
+  table block ids, game list titles), sagaopc (NUP directory cycles), Quixomatic (eden-cli, Switch 2
+  module names), YLTai (SDL motion after reconnect), Aidan Kinzett and oledz-i (NUP detection,
+  geometry stream 0), NicholasBly and ominixisboss (dynarmic), kipavy (storage CAS loop),
+  adamhahnHU and arisqz (sparse layered images), Pavel Barabanov and andrewleeog (F2I bits, host1x
+  syncpoint actions), MFS-code (Switch 2 GOB order), CarlosKeese and Dennys Kaluzny Pereira
+  (lowering), failaip12 (memory manager bounds).
+- rdenno: the Mario Tennis Fever fixes in 0.5.1.
 
 ## License
 
-GPLv3 or any later version, see [LICENSE.txt](LICENSE.txt). Based on
-[zortos293/Eglantine](https://github.com/zortos293/Eglantine), Eglantine,
+GPLv3 or any later version, see [LICENSE.txt](LICENSE.txt). Started from
+[Eglantine](https://github.com/zortos293/Eglantine), which builds on
 [Eden](https://git.eden-emu.dev/eden-emu/eden), yuzu and Sudachi.

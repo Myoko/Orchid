@@ -135,7 +135,7 @@ Just lowered: the CALL that sits after the main EXIT (a call inside the captured
 
 ### Encoding notes for the last five
 
-I verified the MUFU operation field with the turingas assembler (sm_80): `w2 = op << 10`, COS=0, SIN=1, EX2=2, LG2=3, RCP=4, RSQ=5 — matching Eglantine's `operation = Bits(74, 6)`. Fortune's Weave uses operation **9** (`w2 = 0x00002400`), which turingas does not know and which has no Maxwell equivalent; it needs an expansion (for example tanh as (e^2x - 1)/(e^2x + 1) from EX2 and RCP).
+I verified the MUFU operation field with the turingas assembler (sm_80): `w2 = op << 10`, COS=0, SIN=1, EX2=2, LG2=3, RCP=4, RSQ=5 — matching Orchid's `operation = Bits(74, 6)`. Fortune's Weave uses operation **9** (`w2 = 0x00002400`), which turingas does not know and which has no Maxwell equivalent; it needs an expansion (for example tanh as (e^2x - 1)/(e^2x + 1) from EX2 and RCP).
 
 Reproduce an encoding the same way: write a two-line file with a `<params>` block and control codes (`--:-:-:-:1    MUFU.SIN R0, R1;`), assemble with `python3 -m turingas.main -i test.sass -o test.cubin -arch 80`, then read `.text.kern` from the cubin (16 bytes per instruction, low word first).
 

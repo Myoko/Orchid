@@ -308,4 +308,29 @@ TEST_CASE("Ampere terminal minmax proof rejects extended instruction modes",
     invalid_register_form[5].words[1] |= 1U << 8;
     REQUIRE_FALSE(static_cast<bool>(Shader::Ampere::LowerToMaxwell(invalid_register_form)));
 }
+TEST_CASE("Ampere capture falls back to the closing self-branch before an invalid branch",
+          "[video_core][ampere]") {
+    // NOP, BRA to itself (PT, UPT), then data that decodes as a branch before the program start.
+    constexpr std::array<Instruction, 3> code{{
+        {{0x00007918, 0, 0, 0x000fc000}},
+        {{0x00007947, 0xfffffff0, 0x03bfffff, 0x000fc000}},
+        {{0x00007947, 0xffffff00, 0x03bfffff, 0x000fc000}},
+    }};
+    ProgramCaptureState capture;
+    REQUIRE(capture.Observe(code[0], 0) == ProgramCaptureState::Result::Continue);
+    REQUIRE(capture.Observe(code[1], 1) == ProgramCaptureState::Result::Continue);
+    REQUIRE(capture.Observe(code[2], 2) == ProgramCaptureState::Result::InvalidTarget);
+    REQUIRE(capture.FallbackEnd() == 2);
+
+    // A self-branch before a forward branch target is no end.
+    auto guarded = code;
+    guarded[0] = Instruction{{0x00007947, 0x00000020, 0x03800000, 0x000fc000}}; // BRA +0x20
+    ProgramCaptureState forward;
+    for (u32 index = 0; index < 2; ++index) {
+        REQUIRE(forward.Observe(guarded[index], index) == ProgramCaptureState::Result::Continue);
+    }
+    REQUIRE(forward.Observe(guarded[2], 2) == ProgramCaptureState::Result::InvalidTarget);
+    REQUIRE(forward.FallbackEnd() == 0);
+}
+
 } // namespace

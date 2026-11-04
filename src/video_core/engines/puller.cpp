@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <optional>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -88,6 +89,28 @@ bool MetBeforeDrain(DmaPusher& dma_pusher, GPUVAddr address, u32 operation, u32 
     return pending && *pending >= value;
 }
 
+// Releases queued for the split's back (GpuSplit::NoteQueuedRelease). Donkey Kong Bananza drained
+// the back at ~40% of its front's time on acquires the 3D engine's queued releases meet.
+void NoteQueuedRelease(DmaPusher& dma_pusher, GPUVAddr address, u32 payload) {
+    if (!Tegra::Nx2AcquireQueuedEnabled() || !VideoCommon::GpuSplit::Get().Active()) {
+        return;
+    }
+    if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address)) {
+        VideoCommon::GpuSplit::Get().NoteQueuedRelease(*device, payload);
+    }
+}
+
+std::optional<u32> QueuedReleasePayload(DmaPusher& dma_pusher, GPUVAddr address) {
+    if (!Tegra::Nx2AcquireQueuedEnabled() || !VideoCommon::GpuSplit::Get().Active()) {
+        return std::nullopt;
+    }
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
+    if (!device) {
+        return std::nullopt;
+    }
+    return VideoCommon::GpuSplit::Get().QueuedRelease(*device);
+}
+
 } // Anonymous namespace
 
 bool Puller::PendingAcquire::Matches(u32 current) const {
@@ -157,6 +180,7 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
         return false;
     }
     pending_acquire.reset();
+    dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
     Nx2SemaphoreWaiters::Get().Remove(this);
     return true;
 }
@@ -261,6 +285,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, properties, payload] {
             rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload, properties, payload, 0);
         });
+        NoteQueuedRelease(dma_pusher, sequence_address, payload);
     } else if (g_nx2_ampere) {
         // Switch 2 waits on semaphores the CPU (or another channel) releases, e.g. once it has
         // written the commands this channel runs next: suspend the channel until the value is
@@ -279,6 +304,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
         if (MetBeforeDrain(dma_pusher, acquire.address, acquire.operation, acquire.value)) {
+            return;
+        }
+        if (const auto queued = QueuedReleasePayload(dma_pusher, acquire.address);
+            queued && acquire.Matches(*queued)) {
             return;
         }
         DrainBack();
@@ -303,6 +332,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         dma_pusher.rasterizer->ReleaseFences();
         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             pending_acquire = acquire;
+            dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
             VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireWaits, 1);
         } else {
             waiters.Remove(this);
@@ -363,6 +393,7 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
         rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload,
                           VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
     });
+    NoteQueuedRelease(dma_pusher, sequence_address, payload);
 }
 
 void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {
@@ -392,6 +423,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
             rasterizer->Query(address, VideoCommon::QueryType::Payload,
                               VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
         });
+        NoteQueuedRelease(dma_pusher, address, payload);
         return;
     }
     // Acquires: check once after flushing pending fences; never block the GPU thread on them.

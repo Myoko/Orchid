@@ -1,6 +1,6 @@
 # FFmpeg and dav1d notices
 
-These notices accompany Eglantine distributions that include FFmpeg or dav1d.
+These notices accompany Orchid distributions that include FFmpeg or dav1d.
 They supplement the project's other license materials. A notice's presence does
 not mean that every build includes that library or uses the version listed here.
 

@@ -112,6 +112,7 @@ public:
 
     void TickFrame(Common::SlotVector<Buffer>& slot_buffers) noexcept;
 
+    /// Returns the mask of bindings whose repacked state changed.
     u32 SetVertexRepackLayout(const Tegra::Engines::Maxwell3D::Regs& regs, bool dynamic_input);
 
     bool IsVertexRepacked(u32 binding) const {
@@ -162,12 +163,16 @@ public:
 
     void BindQuadIndexBuffer(PrimitiveTopology topology, u32 first, u32 count);
 
-    /// A non-indexed indirect quad draw: binds the quad index buffer and converts the arguments
-    /// at src into indexed ones, returned by QuadIndirectArgs.
-    void BindQuadIndirect(VkBuffer src_buffer, u32 src_offset);
+    /// Grows the quad index buffer for BindArrayIndirect. Growing it submits the command buffer,
+    /// so this runs before the draw binds its vertex buffers.
+    void ReserveQuadIndirect();
 
-    [[nodiscard]] std::pair<VkBuffer, VkDeviceSize> QuadIndirectArgs() const {
-        return quad_indirect_args;
+    /// A single non-indexed indirect draw: checks the arguments at src, returned by
+    /// ArrayIndirectArgs. Quads also bind the quad index buffer and are converted to indexed.
+    void BindArrayIndirect(VkBuffer src_buffer, u32 src_offset, bool quads);
+
+    [[nodiscard]] std::pair<VkBuffer, VkDeviceSize> ArrayIndirectArgs() const {
+        return array_indirect_args;
     }
 
     void BindVertexBuffer(u32 index, VkBuffer buffer, u32 offset, u32 size, u32 stride);
@@ -178,16 +183,38 @@ public:
 
     void BindTransformFeedbackBuffers(VideoCommon::HostBindings<Buffer>& bindings);
 
-    bool BindSmallUniformReusing(Tegra::MaxwellDeviceMemoryManager& device_memory,
-                                size_t stage, u32 index, DAddr device_addr, u32 size);
+    /// This and the two members below are the hooks of VideoCommon::StreamUniformReusable
+    /// (buffer_cache/uniform_stream_reuse.h).
+    struct StreamUniformRef {
+        VkBuffer buffer;
+        VkDeviceAddress device_address; // base of `buffer`, 0 without buffer device address
+        u32 offset;
+    };
 
     std::span<u8> BindMappedUniformBuffer([[maybe_unused]] size_t stage,
                                           [[maybe_unused]] u32 binding_index,
                                           u32 size) {
         const StagingBufferRef ref = staging_pool.Request(size, MemoryUsage::Upload);
-        guest_descriptor_queue.AddBuffer(ref.buffer, ref.device_address,
-                                         static_cast<u32>(ref.offset), size);
+        last_stream_uniform = StreamUniformRef{
+            .buffer = ref.buffer,
+            .device_address = ref.device_address,
+            .offset = static_cast<u32>(ref.offset),
+        };
+        RebindStreamUniform(last_stream_uniform, size);
         return ref.mapped_span;
+    }
+
+    /// The allocation of the latest BindMappedUniformBuffer call.
+    [[nodiscard]] StreamUniformRef LastStreamUniformRef() const noexcept {
+        return last_stream_uniform;
+    }
+
+    /// Adds `ref` to the descriptor payload exactly as BindMappedUniformBuffer did when it made
+    /// the allocation (it is the very same call). The caller guarantees the allocation is still
+    /// live: made on the scheduler tick that is current now, so the staging pool has not recycled
+    /// it and the GPU has not even started on it.
+    void RebindStreamUniform(const StreamUniformRef& ref, u32 size) {
+        guest_descriptor_queue.AddBuffer(ref.buffer, ref.device_address, ref.offset, size);
     }
 
     [[nodiscard]] VkDeviceSize SparseAlignmentFor(bool sparse_compatible) const noexcept {
@@ -291,26 +318,16 @@ private:
     std::unique_ptr<Uint8Pass> uint8_pass;
     std::unique_ptr<VertexRepackPass> vertex_repack_pass;
     u32 vertex_repack_mask{};
+    bool static_vertex_repack{};
     QuadIndexedPass quad_index_pass;
     QuadIndirectPass quad_indirect_pass;
-    std::pair<VkBuffer, VkDeviceSize> quad_indirect_args{};
+    std::pair<VkBuffer, VkDeviceSize> array_indirect_args{};
 
     MultiRangeBufferCache multi_range_buffers;
     boost::container::small_vector<MultiRangeSource, 16> multi_range_sources;
     VkDeviceSize multi_range_total{};
 
-    struct UniformStreamReuse {
-        static constexpr u32 MaxBytes = 4096;
-        struct Slot {
-            StagingBufferRef ref{};
-            u64 tick{};
-            u32 size{};
-            std::array<u8, MaxBytes> bytes{};
-        };
-        std::array<std::array<Slot, 18>, 5> slots{};
-        std::array<u8, MaxBytes> scratch{};
-    };
-    std::unique_ptr<UniformStreamReuse> uniform_stream_reuse;
+    StreamUniformRef last_stream_uniform{};
 
     bool limit_dynamic_storage_buffers = false;
     u32 max_dynamic_storage_buffers = (std::numeric_limits<u32>::max)();

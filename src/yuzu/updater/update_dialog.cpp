@@ -105,7 +105,7 @@ void UpdateDialog::Download() {
     client->set_read_timeout(timeout_seconds);
     client->set_write_timeout(timeout_seconds);
     client->set_follow_location(true);
-    client->set_default_headers({{"User-Agent", "Eglantine"}});
+    client->set_default_headers({{"User-Agent", "Orchid"}});
 
 #ifdef YUZU_BUNDLED_OPENSSL
     client->load_ca_cert_store(kCert, sizeof(kCert));

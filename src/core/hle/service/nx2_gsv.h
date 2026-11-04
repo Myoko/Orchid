@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <initializer_list>
+#include <limits>
 #include <atomic>
 #include <deque>
 #include <map>
@@ -285,8 +286,8 @@ private:
         request.syncpoint = syncpoint;
         request.pending = true;
         auto& manager = system.Host1x().GetSyncpointManager();
-        // The action runs on the GPU thread under the manager's lock, or inline if the value is
-        // already reached.
+        // The action runs on the GPU thread (after the manager's lock; a cancel waits for it), or
+        // inline if the value is already reached.
         request.handle = manager.RegisterGuestAction(
             syncpoint, static_cast<u32>(value),
             [shared = m_shared, &kernel = system.Kernel(), &request, event] {
@@ -932,7 +933,15 @@ private:
                                                      Kernel::KMemoryManager::Direction::FromBack),
                 false))) {
             if (log_failure) {
-                LOG_ERROR(Service, "nx2:gpu 214 could not allocate {:#x} bytes", size);
+                auto& manager = kernel_core.MemoryManager();
+                using Pool = Kernel::KMemoryManager::Pool;
+                LOG_ERROR(Service,
+                          "nx2:gpu 214 could not allocate {:#x} bytes (system non-secure pool {} of "
+                          "{} MiB free, application pool {} of {} MiB free)",
+                          size, manager.GetFreeSize(Pool::SystemNonSecure) >> 20,
+                          manager.GetSize(Pool::SystemNonSecure) >> 20,
+                          manager.GetFreeSize(Pool::Application) >> 20,
+                          manager.GetSize(Pool::Application) >> 20);
             }
             return std::nullopt;
         }
@@ -1295,7 +1304,10 @@ inline Nx2ImageLayout Nx2CalculateImageLayout(const u32* preference) {
     }
     const u64 block_rows = u64{1} << layout.block_height_log2;
     layout.size = layout.pitch * Common::AlignUp(u64{layout.height}, block_rows);
-    layout.alignment = std::max<u64>(64 * block_rows, 0x1000);
+    // 4 KiB, not one block (8 KiB at 128 rows): Star Fox places its window textures at offset
+    // 0x1000 in their memory, and NativeWindow::Initialize fails on a misaligned offset, leaving
+    // the NVN window without a native window (null call in NativeWindow::Acquire).
+    layout.alignment = 0x1000;
     return layout;
 }
 
@@ -1516,37 +1528,41 @@ private:
             LOG_INFO(Service, "nx2:vi2 229 present #{} token={:#x} slot={} image={}", m_presents,
                      u64{w[2]} | (u64{w[3]} << 32), w[4], w[5]);
         }
-        // Wait for the previous frame's fence instead of this one, so the game prepares frame N+1
-        // while the GPU thread runs frame N (the console keeps several frames in flight). Waiting
-        // for this frame serialized the two: 8-56 ms of every 34-105 ms frame on title 1.
-        // EDEN_NX2_FRAMES_AHEAD=0 restores the wait for the current frame.
-        static const bool frames_ahead = [] {
+        // Wait for this frame's fence, so the game doesn't write the next frame's data (constant
+        // buffers holding texture handles, vertex data, Pokopia's glyph atlas) while the GPU
+        // thread still reads this frame's. But title 1's GPU waits on semaphores its CPU releases
+        // only after this present returns: while a channel stays suspended on one, wait for the
+        // previous frame's fence instead and let the game prepare frame N+1 meanwhile (waiting
+        // for this frame there cost 8-56 ms of every 34-105 ms frame, or never finished).
+        // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one.
+        static const int frames_ahead = [] {
             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
-            return value == nullptr || value[0] != '0';
+            return value == nullptr ? -1 : value[0] == '1' ? 1 : 0;
         }();
         const auto entered = std::chrono::steady_clock::now();
-        if (frames_ahead) {
+        if (frames_ahead == 1 || (frames_ahead == -1 && !WaitForFrame(~w[22], w[24], true))) {
             LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
                       m_presents, ~w[22], w[24], m_previous_fence_id, m_previous_fence_value,
                       ~w[22] < 192 ? system.Host1x().GetSyncpointManager().GetGuestSyncpointValue(~w[22]) : 0U);
-            // Only run a frame ahead while the GPU keeps up. With the previous frame still on the
-            // GPU here, the GPU is the limit and running ahead gains nothing; and Splatoon Raiders,
-            // which reuses its command memory as if the GPU were at most a frame behind, rewrote
-            // command lists Eden had not read yet (misread commands, then crashes, with a slow
-            // GPU). Wait for this frame too then.
-            const bool gpu_behind =
-                m_previous_fence_id < 192 &&
-                !system.Host1x().GetSyncpointManager().IsReadyGuest(m_previous_fence_id,
-                                                                    m_previous_fence_value);
+            // With EDEN_NX2_FRAMES_AHEAD=1, only run a frame ahead while the GPU keeps up. With
+            // the previous frame still on the GPU here, the GPU is the limit and running ahead
+            // gains nothing; and Splatoon Raiders, which reuses its command memory as if the GPU
+            // were at most a frame behind, rewrote command lists Eden had not read yet (misread
+            // commands, then crashes, with a slow GPU). Wait for this frame too then. Not when a
+            // suspended channel brought us here: this frame can't finish before the present
+            // returns.
+            const bool gpu_behind = frames_ahead == 1 && m_previous_fence_id < 192 &&
+                                    !system.Host1x().GetSyncpointManager().IsReadyGuest(
+                                        m_previous_fence_id, m_previous_fence_value);
             WaitForFrame(m_previous_fence_id, m_previous_fence_value);
             if (gpu_behind) {
                 WaitForFrame(~w[22], w[24]);
             }
-            m_previous_fence_id = ~w[22];
-            m_previous_fence_value = w[24];
-        } else {
+        } else if (frames_ahead == 0) {
             WaitForFrame(~w[22], w[24]);
         }
+        m_previous_fence_id = ~w[22];
+        m_previous_fence_value = w[24];
         const auto waited = std::chrono::steady_clock::now();
         Composite(w[5], ~w[22], w[24], w[6], w[7], w[8]);
         const auto composited = std::chrono::steady_clock::now();
@@ -1607,6 +1623,8 @@ private:
     // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
     std::chrono::steady_clock::time_point m_next_vblank{};
     u32 m_swap_word{};
+    u32 m_swap_stable{};  ///< Presents since the swap word last changed (capped)
+    u32 m_swap_changes{}; ///< Logged swap word changes (the first 32)
 
     // timing: present word 12, (swap interval << 16) | refresh rate. Fire Emblem: Fortune's Weave
     // sends 0x1003c during its boot logos and 0x2003c (two vblanks per frame, 30 fps) after; paced
@@ -1619,10 +1637,27 @@ private:
             const char* value = std::getenv("EDEN_NX2_SWAP_INTERVAL");
             return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
         }();
-        const u32 swap_interval =
-            forced_interval != 0 ? forced_interval : std::clamp<u32>(timing >> 16, 1, 4);
+        // EDEN_NX2_SWAP_STABLE=<presents>: honour an interval above 1 only once the game has kept
+        // it that long. Mario Kart World flips between 1 and 2 every few frames (its own timing on a
+        // VRR display); held to two vblanks on each 2 it fell from ~40 to 20-30 fps for Selevet.
+        static const u32 stable_presents = [] {
+            const char* value = std::getenv("EDEN_NX2_SWAP_STABLE");
+            return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
+        }();
+        const bool changed = timing != std::exchange(m_swap_word, timing);
+        if (changed) {
+            m_swap_stable = 0;
+        } else if (m_swap_stable < stable_presents) {
+            ++m_swap_stable;
+        }
+        const u32 requested_interval = std::clamp<u32>(timing >> 16, 1, 4);
+        const u32 swap_interval = forced_interval != 0              ? forced_interval
+                                  : m_swap_stable >= stable_presents ? requested_interval
+                                                                     : 1;
         const u32 refresh_rate = (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
-        if (timing != std::exchange(m_swap_word, timing)) {
+        // The first 32 changes: a title that flips its interval every few frames filled the log.
+        if (changed && m_swap_changes < 32) {
+            ++m_swap_changes;
             LOG_INFO(Service, "nx2:vi2 present #{} swap interval {} at {} Hz (word 12 = {:#x})",
                      m_presents, swap_interval, refresh_rate, timing);
         }
@@ -1643,9 +1678,12 @@ private:
         m_next_vblank += interval;
     }
 
-    void WaitForFrame(u32 fence_id, u32 fence_value) {
+    /// Waits until the fence is reached. With `unless_gpu_waits`, gives up after a few ms once a
+    /// GPU channel was seen suspended on a semaphore (it may be one this thread releases later).
+    /// Returns whether the fence was reached.
+    bool WaitForFrame(u32 fence_id, u32 fence_value, bool unless_gpu_waits = false) {
         if (fence_id >= 192) {
-            return;
+            return true;
         }
         auto& syncpoints = system.Host1x().GetSyncpointManager();
         const auto start = std::chrono::steady_clock::now();
@@ -1670,10 +1708,23 @@ private:
                 wake->cv.notify_all();
             });
             std::unique_lock lk{wake->mutex};
+            // Title 1's channels resume and suspend again while they wait on this thread, so any
+            // suspension counts, not only an unbroken one.
+            bool gpu_waited = false;
             while (!wake->done && system.IsPoweredOn() &&
                    std::chrono::steady_clock::now() < deadline) {
-                wake->cv.wait_for(lk, std::chrono::milliseconds{50});
+                if (unless_gpu_waits) {
+                    gpu_waited |= system.GPU().HasSuspendedChannels();
+                    if (gpu_waited &&
+                        std::chrono::steady_clock::now() - start > std::chrono::milliseconds{3}) {
+                        return false;
+                    }
+                }
+                wake->cv.wait_for(lk, std::chrono::milliseconds{unless_gpu_waits ? 1 : 50});
             }
+        }
+        if (unless_gpu_waits && !syncpoints.IsReadyGuest(fence_id, fence_value)) {
+            return false;
         }
         if (!syncpoints.IsReadyGuest(fence_id, fence_value) && m_wait_timeouts++ < 64) {
             LOG_WARNING(Service, "nx2:vi2 present #{} fence ({}, {}) not reached in 4 s (now {})",
@@ -1686,6 +1737,7 @@ private:
                          std::chrono::steady_clock::now() - start)
                          .count());
         }
+        return syncpoints.IsReadyGuest(fence_id, fence_value);
     }
 
     // Shows a presented native image: word 5 is the image id, ~word 22 / word 24 the GPU fence
@@ -2230,7 +2282,7 @@ public:
             {8, &INx2VideoSession::Flush, "Flush"},
             {101, &INx2VideoSession::Configure, "Configure"},
             {109, &INx2VideoSession::SubmitInput, "SubmitInputBuffer"},
-            {115, &INx2VideoSession::Succeed, "Finalize"},
+            {115, &INx2VideoSession::Finalize, "Finalize"},
             {200, &INx2VideoSession::Succeed, "Initialize"},
             {201, &INx2VideoSession::Succeed, "InitializeWithFlag"},
             {202, &INx2VideoSession::Succeed, "InitializeWithFlagAndValue"},
@@ -2303,6 +2355,10 @@ private:
         if (Nx2FirstVideoCommand(GetServiceName(), ctx.GetCommand())) {
             LOG_INFO(Service, "{} TIPC {} {} (first use): words {:08x}", GetServiceName(),
                      ctx.GetCommand(), what, fmt::join(std::span<const u32>{w, 12}, " "));
+        } else if (static const bool trace = std::getenv("EDEN_NX2_VDEC_TRACE") != nullptr; trace) {
+            // EDEN_NX2_VDEC_TRACE=1: every video decoder call at Info level.
+            LOG_INFO(Service, "{} TIPC {} {}: [2]={:#x} [3]={:#x} [4]={:#x} [5]={:#x}",
+                     GetServiceName(), ctx.GetCommand(), what, w[2], w[3], w[4], w[5]);
         } else {
             LOG_DEBUG(Service, "{} TIPC {} {}: [2]={:#x} [3]={:#x} [4]={:#x} [5]={:#x}",
                       GetServiceName(), ctx.GetCommand(), what, w[2], w[3], w[4], w[5]);
@@ -2333,6 +2389,11 @@ private:
         std::vector<u8> configuration;
         if (!ctx.BufferDescriptorA().empty()) {
             const auto data = ctx.ReadBufferA(0);
+            configuration.assign(data.begin(), data.end());
+        }
+        // Some titles pass the configuration in an X buffer instead.
+        if (configuration.empty() && !ctx.BufferDescriptorX().empty()) {
+            const auto data = ctx.ReadBufferX(0);
             configuration.assign(data.begin(), data.end());
         }
         Log(ctx, "configure");
@@ -2401,7 +2462,18 @@ private:
             // reply (0x1c286f) froze the game on a movie's last frame. The image stays out of
             // m_free and uncounted, so later frames (the player keeps submitting empty
             // end-of-stream inputs) still fill images in the order their fences count.
-            if (release_fence && m_stream_ended && m_inputs.empty() && m_decoded.empty()) {
+            // EDEN_NX2_VDEC_EOS_KEEP_PENDING=1 keeps such fences pending until Stop or Finalize
+            // instead (Djihads build 177 behaviour). Donkey Kong Bananza always keeps them
+            // pending: it acquires the handed back frames, then flushes and restarts its looping
+            // hint movies and gives both images back, and now and then aborts (2162-0001) right
+            // after the restart; its pending fences are filled by the restarted movie.
+            static const bool keep_pending = [] {
+                const char* env = std::getenv("EDEN_NX2_VDEC_EOS_KEEP_PENDING");
+                return env != nullptr && env[0] != '0';
+            }();
+            const bool bananza = system.GetApplicationProcessProgramID() == 0x040074A01BF12000ULL;
+            if (!keep_pending && !bananza && release_fence && m_stream_ended &&
+                m_inputs.empty() && m_decoded.empty()) {
                 value = static_cast<u32>(
                     system.Host1x().GetSyncpointManager().GetGuestSyncpointValue(m_syncpoint));
                 m_outputs.push_back({image, m_out_width, m_out_height, 0, true, true});
@@ -2460,7 +2532,7 @@ private:
             std::scoped_lock lk{m_mutex};
             m_inputs.push_back(std::move(input));
             m_stream_ended = false;
-            m_ready->room.store(m_inputs.size() < MaxQueuedInputs, std::memory_order_relaxed);
+            m_ready->room.store(!end && m_inputs.size() < MaxQueuedInputs, std::memory_order_relaxed);
         }
         m_cv.notify_one();
         const u64 id = ++m_submitted;
@@ -2479,9 +2551,37 @@ private:
             m_flush = true;
             m_stream_ended = false;
             m_ready->room.store(true, std::memory_order_relaxed);
+            // Only Stop: Bananza flushes (8) after its movies end and treats every completed
+            // fence as a frame to acquire.
+            if (ctx.GetCommand() == 207) {
+                CompleteHandedFences();
+            }
         }
         m_cv.notify_one();
         TipcReplyWords(ctx, {});
+    }
+
+    void Finalize(HLERequestContext& ctx) {
+        Log(ctx, "finalize");
+        {
+            std::scoped_lock lk{m_mutex};
+            CompleteHandedFences();
+        }
+        TipcReplyWords(ctx, {});
+    }
+
+    // Advances the decoder's syncpoint to the last value handed out (m_mutex held).
+    void CompleteHandedFences() {
+        if (m_syncpoint == NoSyncpoint) {
+            return;
+        }
+        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        const u32 target = m_sync_base + m_handed;
+        u32 current = static_cast<u32>(syncpoints.GetGuestSyncpointValue(m_syncpoint));
+        while (static_cast<s32>(target - current) > 0) {
+            syncpoints.IncrementGuest(m_syncpoint);
+            ++current;
+        }
     }
 
     void GetOutputInfo(HLERequestContext& ctx) {
@@ -2557,6 +2657,7 @@ private:
                 m_out_height = height;
                 if (frame.end) {
                     m_stream_ended = true;
+                    m_ready->room.store(false, std::memory_order_relaxed);
                 }
                 system.Host1x().GetSyncpointManager().IncrementGuest(m_syncpoint);
                 ++m_frames_out;
@@ -2569,7 +2670,31 @@ private:
             }
             Input input = std::move(m_inputs.front());
             m_inputs.pop_front();
-            m_ready->room.store(m_inputs.size() < MaxQueuedInputs, std::memory_order_relaxed);
+            if (!m_stream_ended) {
+                m_ready->room.store(m_inputs.size() < MaxQueuedInputs, std::memory_order_relaxed);
+            }
+            if ((!decoder || !decoder->IsOpen()) &&
+                !Tegra::Host1x::ParseNx2VideoConfiguration(m_configuration)) {
+                // No codec name or H.264 parameter sets at the start of the configuration: take a
+                // codec name further in, else H.264 when the stream is H.264 (Yoshi demo).
+                const std::string_view text{reinterpret_cast<const char*>(m_configuration.data()),
+                                            m_configuration.size()};
+                std::string_view codec;
+                for (const std::string_view candidate : {"video/avc", "video/vp9", "video/vp8"}) {
+                    if (text.find(candidate) != std::string_view::npos) {
+                        codec = candidate;
+                        break;
+                    }
+                }
+                if (codec.empty() && Tegra::Host1x::IsH264Stream(input.data)) {
+                    codec = "video/avc";
+                }
+                if (!codec.empty()) {
+                    LOG_INFO(Service, "{} {}-byte configuration without a codec, using \"{}\"",
+                             GetServiceName(), m_configuration.size(), codec);
+                    m_configuration.assign(codec.begin(), codec.end());
+                }
+            }
             const auto configuration = m_configuration;
             lk.unlock();
             if (!decoder || !std::ranges::equal(decoder->Configuration(), configuration)) {
@@ -2590,8 +2715,11 @@ private:
             }
             if (input.end) {
                 // The client stops at the frame marked end of stream; give it one even when the
-                // last input held no picture.
-                if (m_decoded.empty()) {
+                // last input held no picture. Only a picture from this input may carry the mark:
+                // marking an earlier one still waiting for an image hands out one frame fewer
+                // than the client counts, and its next 213 finds the ring empty (0x1c286f), which
+                // Donkey Kong Bananza panics on as a video ends.
+                if (pictures.empty()) {
                     m_decoded.push_back({std::nullopt, input.pts, true});
                 } else {
                     m_decoded.back().end = true;
@@ -2660,6 +2788,10 @@ private:
         if (layout.format == Tegra::Host1x::Nx2PictureFormat::Nv12) {
             memory.WriteBlock(address + layout.chroma_offset, bytes.data() + layout.chroma_offset,
                               layout.pitch * ((height + 1) / 2));
+        }
+        // The game samples the image on the GPU: drop the texture cache's copy of the old frame.
+        if (const auto device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address)) {
+            system.GPU().InvalidateRegion(*device, layout.size);
         }
         return {width, height};
     }

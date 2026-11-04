@@ -167,6 +167,16 @@ inline bool Nx2CheckCommandPagesFirst() {
     }
 }
 
+/// Whether acquires that a release still queued for the split's back meets skip the drain
+/// (GpuSplit::NoteQueuedRelease). EDEN_NX2_ACQUIRE_QUEUED=1 turns it on.
+[[nodiscard]] inline bool Nx2AcquireQueuedEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_ACQUIRE_QUEUED");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 // NVN2 queues release their progress values into the second page of a two-page GPU-accessible
 // region and GPU acquires read the same offsets in the first page (the CPU polls the second).
 // Something on the console copies one into the other; until that is known, the puller mirrors

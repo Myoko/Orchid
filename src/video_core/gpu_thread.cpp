@@ -148,10 +148,17 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
                     split.Defer([gpu = &system.GPU()] { gpu->TickWork(); });
                 } else if (auto* run = std::get_if<RunCommand>(&next.data)) {
-                    split.DeferFunction(std::move(run->func));
+                    if (run->before_later_reads) {
+                        split.Drain();
+                        run->func();
+                    } else {
+                        split.DeferFunction(std::move(run->func));
+                    }
                 } else if (const auto* read = std::get_if<CpuReadCommand>(&next.data)) {
                     split.Defer([this, rasterizer_ptr, command = *read,
                                  sequence = next.published_work_sequence] {
+                        // Apply collected guest writes before downloading GPU data over them.
+                        system.GPU().InvalidateGPUCache();
                         *command.result = GPUThread::ReadMemory(*rasterizer_ptr, *this, state,
                                                               command.addr, command.size, sequence,
                                                               command.diagnostic);
@@ -189,6 +196,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 Profile::Scope scope{Profile::Zone::Run};
                 run->func();
             } else if (const auto* read = std::get_if<CpuReadCommand>(&next.data)) {
+                // Apply collected guest writes before downloading GPU data over them.
+                system.GPU().InvalidateGPUCache();
                 *read->result = GPUThread::ReadMemory(*renderer.ReadRasterizer(), *this, state,
                                                     read->addr, read->size,
                                                     next.published_work_sequence, read->diagnostic);
@@ -273,8 +282,8 @@ void ThreadManager::EndAsyncGuestWrite() {
     state.async_guest_writes.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-void ThreadManager::Run(std::function<void()>&& func, bool is_async) {
-    PushCommand(RunCommand{std::move(func)}, false, is_async);
+void ThreadManager::Run(std::function<void()>&& func, bool is_async, bool before_later_reads) {
+    PushCommand(RunCommand{std::move(func), before_later_reads}, false, is_async);
 }
 
 void ThreadManager::InvalidateRegion(DAddr addr, u64 size) {

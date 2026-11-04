@@ -1,0 +1,109 @@
+# Fork commits looked at and turned down: <hash> <repo>: <reason>. tools/fork-scan.sh leaves them out.
+# Roots
+cf55e9e9f Djihads80/Eglantine: test mocks already have GetPointer in Orchid
+0c6f441b1 Djihads80/Eglantine: CI trigger change, Orchid builds by hand
+b3f983a6b zortos293/Eglantine: command fetch ordering already in Orchid's dma_pusher, rest triaged with 8cd5c6a44
+fae3bc64a zortos293/Eglantine: snapshot selection already covered by Orchid's generation check
+b9d6b4a71 zortos293/Eglantine: tunes the FE temporal stand-in, Orchid runs real FSR 3.1
+219ed4ff6 zortos293/Eglantine: rebrand
+c505c7f68 zortos293/Eglantine: rebrand build fix
+29571ea9d zortos293/Eglantine: release workflow
+f69023f55 zortos293/Eglantine: README
+7d7dc8d5f zortos293/Eglantine: CI caching and policy removal
+e8d94946c sylvieistaken/selevet-eglantine: EDEN_NX2_SWAP_INTERVAL=2 already does this
+51a140cc4 sylvieistaken/selevet-eglantine: memory layout default already 4 GB
+f28449539 sylvieistaken/selevet-eglantine: covered by Nx2SynchronizeGpuWrittenCommands
+e902aca64 sylvieistaken/selevet-eglantine: already in Orchid via 9c34939757
+64685fe34 sylvieistaken/selevet-eglantine: build target choice
+53c39dfed sylvieistaken/selevet-eglantine: merge of Djihads80 build-104
+# Forks
+002805e1d monteger8/Eglantine-DKB: follow-up of 461015ea5
+0322162c1 CarlosKeese/Eglantine: VOTEU mapped uniform target already in Orchid
+04c62be63 Greencus/Eglantine: hypervisor exit stats, macOS
+0926d935a YLTai/Eglantine: 3 s sensor re-enable watchdog left out (would toggle sensors forever on pads that never stream); baseline reset ported
+0a41327ff failaip12/Eglantine-upstream: kind_map lock already in Orchid
+0e74ac4d5 Vortex727/eglantine-zortos293: AVX-512 CLZ16 vpmovdw, already in Orchid
+10e30299f andrewleeog/Eglantine: HSETP2 0x234 already lowered
+13d34459c Quixomatic/Eglantine: built-in MCP server
+13ff6939b CarlosKeese/Eglantine: FSEL 0xd08 conflicts with Orchid's MUFU 0xd08; FRND cbuf part ported
+16770e85c JayceeB1/Eglantine: 0x927 (ISBEWR, a write) lowered as a read, guessed
+17cce0ebe kashcmdd/Eglantine: GpfifoCapture::Configured declaration, already in Orchid
+190301c2c andrewleeog/Eglantine: NRR duplicate removal, Orchid has one templated path
+1f2d33dee andrewleeog/Eglantine: keyboard_enabled default flip
+23981792e CarlosKeese/Eglantine: skip empty draws on by default, perf change without benchmark
+24f0358ec smarkyie/Eglantine: tests for its own NSP detection rewrite, not ported
+2947692d6 andrewleeog/Eglantine: SDL GUID logging
+2ea8d09a2 SmileyTatsu/Eglantine: same as d55cf6985
+36ab9e9f3 aidankinzett/Eglantine: I2F S16 for MTF text already in Orchid; S8 part has no evidence
+3cb808412 daniel-cabral/Eglantine: caseless romfs lookup, already in Orchid (6cdf4c28a)
+3d12dda84 JayceeB1/Eglantine: resample LUT FixedPoint<24,8> narrowing; no bug shown, micro-opt with unverified claim
+444a0241c MFS-code/Eglantine-steamdeck: sparse backing outside m_region_mutex, Orchid's BackSparseWrite already does this (pending blocks, stale handling)
+4554c780e smarkyie/Eglantine: detect hardware mode through the loader, covered by c5d1f95e3
+45bd8157e aidankinzett/Eglantine: ported only the stream 0 EmitVertex part; OUT/LEPC lowering exists, skipping native GS pipelines drops draws
+461015ea5 aidankinzett+monteger8 (nowhere02): stop tracking at loaded pointers, behaviour change that needed 002805e1d to unbreak atomics; nvn slot index part worth a second look
+47e27f93e NicholasBly/Eglantine: subgroup size only for warp ops, changes RADV compute wave size, needs benchmark, misses uses_tensor_mul_add
+4cd10d83f exploitizm/Eglantine: GPU-queue lock deadlock, Orchid's Nx2GpuCommandScope already publishes GPU work after the locks drop
+50b4ee7bb MarekMarecgy/Eglantine: vdec Start completes handed-out images; Start word layout (w[3]=~syncpoint, w[4]=value) conflicts with the release fence layout, needs a DKB tutorial-video log first
+52a1fc70c Vortex727/eglantine-zortos293: memory_tracker mock batch updates, already in Orchid
+543e2c47a Vortex727/eglantine-zortos293: ampere_sured MSVC C4388, already in Orchid
+5bfdb6836 nowhere02 (yuri2301, andrewleeog): same as f4eea1b0b
+5c56d78b8 ryzendew/Eglantine: tensor/cooperative matrix rework on an old base, big feature
+60bc4fa0c nowhere02 (several forks): VOTEU/LDC/F2I forms already lowered in Orchid
+62680295d NicholasBly/Eglantine: punch holes instead of memset, already in Orchid
+678d5c318 NicholasBly/Eglantine: TranscodeAstcToBcn wait already true in Orchid
+67e5e2db0 Vortex727/eglantine-zortos293: device_memory_manager unregistered asid guard, already in Orchid
+695a54dc2 ominixisboss/Eglantine: u8path replacement, already in Orchid
+6bef20f02 YLTai/Eglantine: motion diagnostics logging
+7216c23ad QcCodingBear/Eglantine: Windows arena release/fallback MEM_RELEASE size, already in Orchid
+7607e6a62 NicholasBly/Eglantine: skip zero fill of never-freed pages, covered by Orchid's granule dirty tracking
+78baf1f58 oledz-i/Eglantine-iOS: RomFS/panic diagnostics logging
+791ac523f aidankinzett/Eglantine: StartThread spin/sleep until the new thread reaches an SVC (MTF boot hang); timing hack, MTF already reaches its menu in Orchid
+7a29dfa5d NicholasBly/Eglantine: ASTC decode wait default flip, needs benchmark
+7e9910f96 NicholasBly/Eglantine: macro position bound, same as ported 6e5c11138
+8013391bc JayceeB1/Eglantine: LazySparseRegions default flip
+8681f9554 CarlosKeese/Eglantine: TXD channel mask already in Orchid
+86d34d703 adamhahnHU/EglantineAMD: same update RomFS layering as 8faac3056, held for the same decision
+875d2d4e1 JayceeB1/Eglantine: drops ISBERD mode checks, guessed
+8bd1a3420 Vortex727/eglantine-zortos293: cemuhook loopback bind, already in Orchid
+8c5c6fea2 Greencus/Eglantine: Hypervisor.framework backend, macOS feature
+8c6e975d2 ryzendew/Eglantine: follow-up of 5c56d78b8
+8faac3056 exploitizm/Eglantine: layer base + updates/<ver> ExeFS/RomFS; Orchid dumps carry full patched update RomFS, layering doubles the MKW RomFS build (206k files); needs a decision (only for delta-extracted dumps)
+93287b910 Yusfft/Eglantine: SendNx2VibrationValues (214) with a guessed value layout sent straight to the host
+981c543be aidankinzett/Eglantine: GetBuiltInFontData type byte decode already in Orchid; remaining clamp change cosmetic
+99d89a2bb oledz-i/Eglantine-iOS: NUP fallback to the pre-b8d2c08d6 packed record layout (existed one day); repack instead
+9a6928547 yumekiru/Eglantine-WiimoteSupport: same Configured declaration plus test, already in Orchid
+9efec9c13 cila-git/Eglantine-intel-fix: syntax fix of abd1fc6de
+a21d96beb MarekMarecgy/Eglantine: DKB terrain culling GS emulation, big per-game feature
+a494e641b yumekiru/Eglantine-WiimoteSupport (Zortos): debug dump dir creation, debug-only
+a5038264c smarkyie/Eglantine: embedded NSP Switch 2 detection, covered by c5d1f95e3
+abd1fc6de cila-git/Eglantine-intel-fix: removes Intel driver workarounds without evidence
+af6a0ebfa NicholasBly/Eglantine: zero imageGranularity already handled (standard block shape)
+afbb0616d andrewleeog/Eglantine: swkbd duplicate case, Orchid has one case
+b38baf1c2 MateescuAdrian/Eglantine: NUP metadata editing UI, feature
+b3cb0d856 NicholasBly/Eglantine: one-time zero fill of the descriptor ring, negligible
+b42d7f5d3 oledz-i/Eglantine-iOS: NUP accepts blob-relative/unaligned extents from other packers; loosens validation, no Orchid packer writes them
+b504f4e82 cira0100/Eglantine-public: NSP Switch 2 detection, covered by c5d1f95e3 (ReadProgramMetadata)
+b6922a0bd MarekMarecgy/Eglantine: arm64 backend honours Unsafe_IgnoreGlobalMonitor (+ env knob); plausible arm64 perf win but arm64-only code, cannot compile here; port with an aarch64 CI run
+b76aa4962 MFS-code/Eglantine-steamdeck: -Werror shadow fixes in code Orchid does not have
+bcf8471dc nowhere02 (several forks): IsGeneric Generic31W already in Orchid
+be45bc3a6 andrewleeog/Eglantine: eden-cli terminate backtrace knob, debug tooling
+c547743ec FZout/Eglantine: same update RomFS layering as 8faac3056, held for the same decision
+c6e6627f7 andrewleeog/Eglantine: eden-cli key script HID keyboard press, harness tooling
+caa117b0f MarekMarecgy/Eglantine: same as 50b4ee7bb
+cbf63c94c smarkyie/Eglantine: tests registration for 24f0358ec
+cc91f3291 MFS-code/Eglantine-steamdeck: guest CPU/wait profiler, panic strings; host memory release already covered by Orchid's granule punch-hole
+cd481689b exploitizm/Eglantine: F2I U16 cbuf abs/neg, already in Orchid (4cd674a06d from Selevet)
+d1a55f813 yumekiru/Eglantine-WiimoteSupport: Wiimote MotionPlus calibration, feature
+d55cf6985 SmileyTatsu/Eglantine: destroy and recreate DeviceMemory on Switch 2 stop; lifetime risk (references held by GPU/device memory managers), Orchid already punches freed granules
+dc2f50397 Vortex727/eglantine-zortos293: rest of the asid guard, already in Orchid
+df48e995e NicholasBly/Eglantine: native reader already uses ReadBlock
+e0d2ac4f7 MFS-code/Eglantine-steamdeck: AppleClang zstd waiver, already in Orchid
+e6e81664e MFS-code/Eglantine-steamdeck: link-register clobber check already skips no-destination ops
+e7498b8f4 Quixomatic/Eglantine: IPC/SVC observers for the MCP server
+eac6bacf3 cila-git/Eglantine-intel-fix: same series
+ef29281d7 NicholasBly/Eglantine: FindBuffer page table bound already in Orchid
+f27246957 Vortex727/eglantine-zortos293: CoreTiming test flag reset, already in Orchid
+f4eea1b0b FZout/Eglantine: NUM_STORAGE_BUFFERS already MAX_SSBOS (32)
+f9ce89d57 yumekiru/Eglantine-WiimoteSupport: Wiimote MotionPlus, feature
+fe6e26379 Greencus/Eglantine: merge duplicate cleanup of its own merge
+fed938450 ominixisboss/Eglantine: memory_tracker mock + core timing reset, already in Orchid

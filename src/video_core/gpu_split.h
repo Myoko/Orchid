@@ -7,8 +7,10 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 
 #include "common/common_types.h"
 
@@ -111,6 +113,30 @@ public:
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
     void WaitForWriters();
 
+    /// Semaphore releases the front sent that the back has not executed yet (front thread only).
+    /// An acquire one of them meets needs no drain: the back runs the release, then the work after
+    /// the acquire, in order, and the host queue keeps that order. Call right after sending one.
+    void NoteQueuedRelease(u64 device_address, u32 payload) {
+        queued_releases[device_address] = {payload, write_position};
+    }
+    /// The payload of a queued release to `device_address` the back has not executed yet.
+    [[nodiscard]] std::optional<u32> QueuedRelease(u64 device_address) {
+        if (queued_releases.empty()) {
+            return std::nullopt;
+        }
+        const auto it = queued_releases.find(device_address);
+        if (it == queued_releases.end()) {
+            return std::nullopt;
+        }
+        // Executed (memory is the authority now), or sent before the split restarted.
+        if (consumed.load(std::memory_order_acquire) >= it->second.sent ||
+            it->second.sent > write_position) {
+            queued_releases.erase(it);
+            return std::nullopt;
+        }
+        return it->second.payload;
+    }
+
 private:
     enum class Kind : u64 {
         Wrap,   ///< The rest of the ring is unused: continue at its start
@@ -170,6 +196,11 @@ private:
     // to the other core and back.
     alignas(64) u64 write_position{};
     u64 last_writer_position{};
+    struct QueuedReleaseEntry {
+        u32 payload;
+        u64 sent;
+    };
+    std::unordered_map<u64, QueuedReleaseEntry> queued_releases;
     u64 published_local{};
     u64 consumed_cache{};
     /// Words between publishes: small right after a drain, while the back has nothing to do.

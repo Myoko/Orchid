@@ -61,6 +61,14 @@ public:
     Result SetInManager(BufferEventFunc buffer_func);
 
     /**
+     * Unregister a manager before it is destroyed. Waits for a callback to it in progress, so the
+     * thread never calls into a destroyed manager.
+     *
+     * @param type - Manager type to clear.
+     */
+    void ClearManager(Event::Type type);
+
+    /**
      * Set an event to signalled, and signal the thread.
      *
      * @param type      - Manager type to set.

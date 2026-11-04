@@ -18,6 +18,7 @@
 #include <QSettings>
 
 #include "common/fs/fs.h"
+#include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -474,6 +475,11 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                                      " (Switch 2 Edition)");
                     }
                 }
+                if (name.empty() || name == " ") {
+                    name = QFileInfo(QString::fromStdString(physical_name))
+                               .completeBaseName()
+                               .toStdString();
+                }
 
                 const FileSys::PatchManager patch{id, system.GetFileSystemController(),
                                                   system.GetContentProvider()};
@@ -568,7 +574,7 @@ void GameListWorker::run() {
         DirEntryReady(game_list_dir);
         if (scan) {
             const auto discovery = GameListDiscovery::Discover(
-                std::filesystem::u8path(game_dir.path), game_dir.deep_scan,
+                std::filesystem::path(Common::FS::ToU8String(game_dir.path)), game_dir.deep_scan,
                 [](const auto& path) {
                     const auto name = Common::FS::PathToUTF8String(path);
                     return HasSupportedFileExtension(name) || IsExtractedNCAMain(name);

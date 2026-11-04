@@ -1587,7 +1587,15 @@ void Device::RemoveUnsuitableExtensions() {
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
     // VK_KHR_shader_quad_control
-    extensions.shader_quad_control = features.shader_quad_control.shaderQuadControl;
+    // VK_KHR_shader_quad_control depends on VK_KHR_shader_maximal_reconvergence: enable it only
+    // when that extension is enabled on the logical device too.
+    extensions.shader_maximal_reconvergence =
+        features.shader_maximal_reconvergence.shaderMaximalReconvergence;
+    RemoveExtensionFeatureIfUnsuitable(extensions.shader_maximal_reconvergence,
+                                       features.shader_maximal_reconvergence,
+                                       VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME);
+    extensions.shader_quad_control = features.shader_quad_control.shaderQuadControl &&
+                                     extensions.shader_maximal_reconvergence;
     RemoveExtensionFeatureIfUnsuitable(extensions.shader_quad_control, features.shader_quad_control,
                                        VK_KHR_SHADER_QUAD_CONTROL_EXTENSION_NAME);
 

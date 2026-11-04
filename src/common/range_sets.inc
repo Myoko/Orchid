@@ -64,7 +64,8 @@ struct RangeSet<AddressType>::RangeSetImpl {
 
     template <typename Func>
     void ForEachInRange(AddressType base_addr, size_t size, Func&& func) const {
-        if (m_ranges_set.empty()) {
+        // An empty query breaks the set's ordering: at address 0 it visits every range, inverted.
+        if (m_ranges_set.empty() || size == 0) {
             return;
         }
         const AddressType start_address = base_addr;
@@ -153,7 +154,8 @@ struct OverlapRangeSet<AddressType>::OverlapRangeSetImpl {
 
     template <typename Func>
     void ForEachInRange(AddressType base_address, size_t size, Func&& func) const {
-        if (m_split_ranges_set.empty()) {
+        // An empty query breaks the set's ordering: at address 0 it visits every range, inverted.
+        if (m_split_ranges_set.empty() || size == 0) {
             return;
         }
         const AddressType start_address = base_address;
@@ -193,11 +195,18 @@ template <typename AddressType>
 RangeSet<AddressType>::RangeSet(RangeSet&& other) {
     m_impl = std::make_unique<RangeSet<AddressType>::RangeSetImpl>();
     m_impl->m_ranges_set = std::move(other.m_impl->m_ranges_set);
+    // A moved-from container is only "valid but unspecified", and callers keep adding to the
+    // source after handing its ranges over (BufferCache::AccumulateFlushes).
+    other.m_impl->m_ranges_set.clear();
 }
 
 template <typename AddressType>
 RangeSet<AddressType>& RangeSet<AddressType>::operator=(RangeSet&& other) {
-    m_impl->m_ranges_set = std::move(other.m_impl->m_ranges_set);
+    if (this != &other) {
+        m_impl->m_ranges_set = std::move(other.m_impl->m_ranges_set);
+        other.m_impl->m_ranges_set.clear();
+    }
+    return *this;
 }
 
 template <typename AddressType>
@@ -257,11 +266,16 @@ template <typename AddressType>
 OverlapRangeSet<AddressType>::OverlapRangeSet(OverlapRangeSet&& other) {
     m_impl = std::make_unique<OverlapRangeSet<AddressType>::OverlapRangeSetImpl>();
     m_impl->m_split_ranges_set = std::move(other.m_impl->m_split_ranges_set);
+    other.m_impl->m_split_ranges_set.clear();
 }
 
 template <typename AddressType>
 OverlapRangeSet<AddressType>& OverlapRangeSet<AddressType>::operator=(OverlapRangeSet&& other) {
-    m_impl->m_split_ranges_set = std::move(other.m_impl->m_split_ranges_set);
+    if (this != &other) {
+        m_impl->m_split_ranges_set = std::move(other.m_impl->m_split_ranges_set);
+        other.m_impl->m_split_ranges_set.clear();
+    }
+    return *this;
 }
 
 template <typename AddressType>
