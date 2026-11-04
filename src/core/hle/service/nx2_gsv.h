@@ -781,6 +781,17 @@ private:
         rb.Push<u32>(static_cast<u32>(count >> 32));
     }
 
+    // Needs m_region_mutex. True when [gpu_address, +size) lies in a region 214 backed.
+    bool InGpuOnlyRegion(u64 gpu_address, u64 size) const {
+        auto region = m_gpu_only_regions.upper_bound(gpu_address);
+        if (region == m_gpu_only_regions.begin()) {
+            return false;
+        }
+        --region;
+        const u64 offset = gpu_address - region->first;
+        return offset < region->second.size && size <= region->second.size - offset;
+    }
+
     bool ApplySparseMapRequest(const Nx2SparseMapRequest& request) {
         if (request.size == 0) {
             return true;
@@ -789,6 +800,24 @@ private:
             return false;
         }
         u64 cpu_address{};
+        if (request.memory_handle != 0 && InGpuOnlyRegion(request.gpu_address, request.size)) {
+            // A GPU-only region (214) keeps the memory this server backed it with. Donkey Kong
+            // Bananza maps one and the same 200 MB block over each of its six regions right after
+            // creating them: all six then shared that memory, and its video, render targets and
+            // bloom images overwrote each other (tiles over the video, glowing smashes).
+            // EDEN_NX2_SPARSE_MAP_GPU_ONLY=1 maps it anyway (debug aid).
+            static const bool map_anyway = std::getenv("EDEN_NX2_SPARSE_MAP_GPU_ONLY") != nullptr;
+            if (!map_anyway) {
+                static u32 logged{};
+                if (logged++ < 16) {
+                    LOG_INFO(Service, "nx2:gpu 216 map [{:#x}, +{:#x}] of memory {} offset {:#x} "
+                                      "into a GPU-only region: keeping its backing",
+                             request.gpu_address, request.size, request.memory_handle,
+                             request.offset);
+                }
+                return true;
+            }
+        }
         if (request.memory_handle != 0) {
             const auto memory = m_memory.find(request.memory_handle);
             if (memory == m_memory.end()) {
