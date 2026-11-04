@@ -10,4 +10,4 @@ externals/* linguist-vendored
 # message (i18n-tools/ts_merge_driver.ps1) instead of by hunks so an upstream
 # update never replaces an existing translation, and keep the bytes as-is
 # (UTF-8, LF) so lrelease and the driver see the same file.
-dist/languages/*.ts merge=eglantine-ts -text
+dist/languages/*.ts merge=orchid-ts -text
