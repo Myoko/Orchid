@@ -46,8 +46,8 @@ li.checked::marker { content: &quot;\2612&quot;; }
         <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; 是任天堂的注册商标。Eden 与任天堂没有任何关系。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <source>About Eglantine</source>
-        <translation>关于 Eglantine</translation>
+        <source>About Orchid</source>
+        <translation>关于 Orchid</translation>
     </message>
     <message>
         <source>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
@@ -57,7 +57,7 @@ hr { height: 1px; border-width: 0; }
 li.unchecked::marker { content: &quot;\2610&quot;; }
 li.checked::marker { content: &quot;\2612&quot;; }
 &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:&apos;Noto Sans&apos;; font-size:9pt; font-weight:400; font-style:normal;&quot;&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:12pt;&quot;&gt;Eglantine is an experimental open-source emulator for the Nintendo Switch 2, based on the Eden emulator. &lt;br /&gt;&lt;br /&gt;This software should not be used to play games you have not legally obtained.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:12pt;&quot;&gt;Orchid is an experimental open-source emulator for the Nintendo Switch 2, based on the Eden emulator. &lt;br /&gt;&lt;br /&gt;This software should not be used to play games you have not legally obtained.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
         <translation>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
 &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;meta charset=&quot;utf-8&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
 p, li { white-space: pre-wrap; }
@@ -65,15 +65,15 @@ hr { height: 1px; border-width: 0; }
 li.unchecked::marker { content: &quot;\2610&quot;; }
 li.checked::marker { content: &quot;\2612&quot;; }
 &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:&apos;Noto Sans&apos;; font-size:9pt; font-weight:400; font-style:normal;&quot;&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:12pt;&quot;&gt;Eglantine 是一款实验性的开源 Nintendo Switch 2 模拟器，基于 Eden 模拟器开发。&lt;br /&gt;&lt;br /&gt;请不要用本软件运行你未通过合法途径获得的游戏。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:&apos;MS Shell Dlg 2&apos;; font-size:12pt;&quot;&gt;Orchid 是一款实验性的开源 Nintendo Switch 2 模拟器，基于 Eden 模拟器开发。&lt;br /&gt;&lt;br /&gt;请不要用本软件运行你未通过合法途径获得的游戏。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; is a trademark of Nintendo. Eglantine is not affiliated with Nintendo in any way.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;“Nintendo Switch”是任天堂的商标。Eglantine 与任天堂没有任何关联。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; is a trademark of Nintendo. Orchid is not affiliated with Nintendo in any way.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;“Nintendo Switch”是任天堂的商标。Orchid 与任天堂没有任何关联。&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Orchid&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Orchid&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
 </context>
 <context>
@@ -2236,6 +2236,28 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
         <source>AMD FidelityFX Super Resolution 3</source>
         <translation>AMD FidelityFX 超级分辨率 3</translation>
     </message>
+    <message>
+        <source>RCAS Sharpness:</source>
+        <translation>RCAS 锐化度：</translation>
+    </message>
+    <message>
+        <source>Strength of RCAS (AMD&apos;s contrast-adaptive sharpening) on the upscaler used in place of a game&apos;s DLSS (AMD FSR 3.1); 0% turns it off.
+Also sets the sharpening of the AMD FSR 1 and SGSR window adapting filters.</source>
+        <translation>替代游戏 DLSS 的超分器（AMD FSR 3.1）所用的 RCAS（AMD 对比度自适应锐化）强度；0% 表示关闭。
+同时决定 AMD FSR 1 与 SGSR 窗口自适应滤镜的锐化程度。</translation>
+    </message>
+    <message>
+        <source>Optical Flow Interpolation (built-in)</source>
+        <translation>光流插帧（内置）</translation>
+    </message>
+    <message>
+        <source>AMD FidelityFX Super Resolution 1 (FSR 1)</source>
+        <translation>AMD FidelityFX 超级分辨率 1 (FSR 1)</translation>
+    </message>
+    <message>
+        <source>AMD FidelityFX Super Resolution 1, softer sharpening</source>
+        <translation>AMD FidelityFX 超级分辨率 1（更柔和的锐化）</translation>
+    </message>
 </context>
 <context>
     <name>ConfigureApplets</name>
@@ -2887,8 +2909,8 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
         <translation>**这会在 Eden 关闭时自动重置。</translation>
     </message>
     <message>
-        <source>**This will be reset automatically when Eglantine closes.</source>
-        <translation>**Eglantine 关闭时会自动重置此项。</translation>
+        <source>**This will be reset automatically when Orchid closes.</source>
+        <translation>**Orchid 关闭时会自动重置此项。</translation>
     </message>
 </context>
 <context>
@@ -3027,8 +3049,8 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
         <translation>网络</translation>
     </message>
     <message>
-        <source>Eglantine Configuration</source>
-        <translation>Eglantine 配置</translation>
+        <source>Orchid Configuration</source>
+        <translation>Orchid 配置</translation>
     </message>
 </context>
 <context>
@@ -3312,8 +3334,8 @@ Would you like to delete the old save data?</source>
         <translation>这个目录已经在列表中了。</translation>
     </message>
     <message>
-        <source>Eglantine</source>
-        <translation>Eglantine</translation>
+        <source>Orchid</source>
+        <translation>Orchid</translation>
     </message>
 </context>
 <context>
@@ -3907,8 +3929,8 @@ Would you like to delete the old save data?</source>
         <translation>禁用 SDL WGI/XInput (需要重启)</translation>
     </message>
     <message>
-        <source>Requires restarting Eglantine</source>
-        <translation>需要重启 Eglantine</translation>
+        <source>Requires restarting Orchid</source>
+        <translation>需要重启 Orchid</translation>
     </message>
 </context>
 <context>
@@ -4639,8 +4661,8 @@ To invert the axes, first move your joystick vertically, and then horizontally.<
         <translation>UDP 测试或触摸校准正在进行中。&lt;br&gt;请耐心等待。</translation>
     </message>
     <message>
-        <source>Eglantine</source>
-        <translation>Eglantine</translation>
+        <source>Orchid</source>
+        <translation>Orchid</translation>
     </message>
 </context>
 <context>
@@ -5609,8 +5631,8 @@ Drag points to change position, or double-click table cells to edit values.</sou
         <translation>恢复默认</translation>
     </message>
     <message>
-        <source>Warning: The settings in this page affect the inner workings of Eglantine&apos;s emulated touchscreen. Changing them may result in undesirable behavior, such as the touchscreen partially or not working. You should only use this page if you know what you are doing.</source>
-        <translation>警告：此页面中的设置会影响 Eglantine 模拟触摸屏的内部机制。更改这些设置可能导致不良后果，例如触摸屏部分失效或完全无法使用。只有在你清楚自己在做什么时，才应使用此页面。</translation>
+        <source>Warning: The settings in this page affect the inner workings of Orchid&apos;s emulated touchscreen. Changing them may result in undesirable behavior, such as the touchscreen partially or not working. You should only use this page if you know what you are doing.</source>
+        <translation>警告：此页面中的设置会影响 Orchid 模拟触摸屏的内部机制。更改这些设置可能导致不良后果，例如触摸屏部分失效或完全无法使用。只有在你清楚自己在做什么时，才应使用此页面。</translation>
     </message>
 </context>
 <context>
@@ -5928,8 +5950,8 @@ Drag points to change position, or double-click table cells to edit values.</sou
         <translation>必须为48个字符，且a-z为小写</translation>
     </message>
     <message>
-        <source>Eglantine Web Service</source>
-        <translation>Eglantine 网络服务</translation>
+        <source>Orchid Web Service</source>
+        <translation>Orchid 网络服务</translation>
     </message>
 </context>
 <context>
@@ -6049,16 +6071,16 @@ Drag points to change position, or double-click table cells to edit values.</sou
         <translation>版本</translation>
     </message>
     <message>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The projects that make Eglantine possible&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;让 Eglantine 得以实现的各个项目&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The projects that make Orchid possible&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;让 Orchid 得以实现的各个项目&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine Dependencies&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Eglantine 依赖项&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Orchid Dependencies&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:28pt;&quot;&gt;Orchid 依赖项&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <source>Eglantine Dependencies</source>
-        <translation>Eglantine 依赖项</translation>
+        <source>Orchid Dependencies</source>
+        <translation>Orchid 依赖项</translation>
     </message>
 </context>
 <context>
@@ -6279,8 +6301,8 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
         <translation>此版本不支持 OpenGL。</translation>
     </message>
     <message>
-        <source>Eglantine has not been compiled with OpenGL support.</source>
-        <translation>Eglantine 在编译时未包含 OpenGL 支持。</translation>
+        <source>Orchid has not been compiled with OpenGL support.</source>
+        <translation>Orchid 在编译时未包含 OpenGL 支持。</translation>
     </message>
 </context>
 <context>
@@ -6455,6 +6477,10 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
         <location filename="../../src/yuzu/game/game_list.cpp" line="643"/>
         <source>Clear</source>
         <translation>清除</translation>
+    </message>
+    <message>
+        <source>Convert to NUP...</source>
+        <translation>转换为 NUP...</translation>
     </message>
 </context>
 <context>
@@ -6861,8 +6887,8 @@ Debug Message: </source>
         <translation>切换性能覆盖层</translation>
     </message>
     <message>
-        <source>Exit Eglantine</source>
-        <translation>退出 Eglantine</translation>
+        <source>Exit Orchid</source>
+        <translation>退出 Orchid</translation>
     </message>
 </context>
 <context>
@@ -8395,30 +8421,30 @@ Would you like to bypass this and exit anyway?</source>
         <translation>空</translation>
     </message>
     <message>
-        <source>&amp;About Eglantine</source>
-        <translation>关于 Eglantine(&amp;A)</translation>
+        <source>&amp;About Orchid</source>
+        <translation>关于 Orchid(&amp;A)</translation>
     </message>
     <message>
-        <source>&amp;Eglantine Dependencies</source>
-        <translation>Eglantine 依赖项(&amp;E)</translation>
+        <source>&amp;Orchid Dependencies</source>
+        <translation>Orchid 依赖项(&amp;E)</translation>
     </message>
     <message>
-        <source>Open &amp;Eglantine Folders</source>
-        <translation>打开 Eglantine 文件夹(&amp;E)</translation>
+        <source>Open &amp;Orchid Folders</source>
+        <translation>打开 Orchid 文件夹(&amp;E)</translation>
     </message>
     <message>
-        <source>Are you sure you want to close Eglantine?</source>
-        <translation>确定要关闭 Eglantine 吗？</translation>
+        <source>Are you sure you want to close Orchid?</source>
+        <translation>确定要关闭 Orchid 吗？</translation>
     </message>
     <message>
-        <source>Eglantine</source>
-        <translation>Eglantine</translation>
+        <source>Orchid</source>
+        <translation>Orchid</translation>
     </message>
     <message>
-        <source>The currently running application has requested Eglantine to not exit.
+        <source>The currently running application has requested Orchid to not exit.
 
 Would you like to bypass this and exit anyway?</source>
-        <translation>当前运行的应用请求 Eglantine 不要退出。
+        <translation>当前运行的应用请求 Orchid 不要退出。
 
 是否要忽略该请求并退出？</translation>
     </message>
@@ -8427,8 +8453,8 @@ Would you like to bypass this and exit anyway?</source>
         <translation>可安装的 Switch 文件 (*.nca *.nsp *.nsz *.xci *.xcz);;Nintendo 内容归档 (*.nca);;Nintendo 提交包 (*.nsp *.nsz);;NX 卡带镜像 (*.xci *.xcz)</translation>
     </message>
     <message>
-        <source>Restart Eglantine to apply the X11 backend.</source>
-        <translation>重启 Eglantine 以应用 X11 后端。</translation>
+        <source>Restart Orchid to apply the X11 backend.</source>
+        <translation>重启 Orchid 以应用 X11 后端。</translation>
     </message>
     <message>
         <source>FSR 3</source>
@@ -8441,6 +8467,124 @@ Would you like to bypass this and exit anyway?</source>
     <message>
         <source>You are using the deconstructed ROM directory format for this game, which is an outdated format that has been superseded by others such as NCA, NAX, XCI, or NSP. Deconstructed ROM directories lack icons, metadata, and update support.&lt;br&gt;For an explanation of the various Switch formats Eglantine supports, out our user handbook. This message will not be shown again.</source>
         <translation>此游戏使用的是解包的 ROM 目录格式，这种格式已经过时，并已被 NCA、NAX、XCI、NSP 等格式取代。解包的 ROM 目录不支持图标、元数据和更新。&lt;br&gt;关于 Eglantine 支持的各种 Switch 格式，请参阅我们的用户手册。此消息不会再次显示。</translation>
+    </message>
+    <message>
+        <source>Optical Flow</source>
+        <translation>光流</translation>
+    </message>
+    <message>
+        <source>FSR 1</source>
+        <translation>FSR 1</translation>
+    </message>
+    <message>
+        <source>FSR 1 Soft</source>
+        <translation>FSR 1 柔和</translation>
+    </message>
+    <message>
+        <source>Check for &amp;Updates...</source>
+        <translation>检查更新(&amp;U)...</translation>
+    </message>
+    <message>
+        <source>Conversion in Progress</source>
+        <translation>正在转换</translation>
+    </message>
+    <message>
+        <source>This game cannot be started while its dump is being converted.</source>
+        <translation>该游戏的转储正在转换，无法启动。</translation>
+    </message>
+    <message>
+        <source>Recommended Mario Kart World settings</source>
+        <translation>推荐的《马力欧卡丁车世界》设置</translation>
+    </message>
+    <message>
+        <source>Use the recommended settings for Mario Kart World?
+
+Vulkan, 1x resolution, GPU Fast, asynchronous shaders, BC3, conservative VRAM, reactive flushing off, FIFO Relaxed VSync, handheld mode, ScaleForce, and FXAA.
+
+They apply to Mario Kart World until Orchid is closed. Your saved settings are not changed.</source>
+        <translation>要对《马力欧卡丁车世界》使用推荐设置吗？
+
+Vulkan、1 倍分辨率、GPU 快速、异步着色器、BC3、保守显存、关闭 reactive flushing、FIFO Relaxed 垂直同步、掌机模式、ScaleForce 以及 FXAA。
+
+这些设置会对《马力欧卡丁车世界》生效，直到 Orchid 关闭；你已保存的设置不会被修改。</translation>
+    </message>
+    <message>
+        <source>Preparing game files...</source>
+        <translation>正在准备游戏文件...</translation>
+    </message>
+    <message>
+        <source>Unable to prepare game files</source>
+        <translation>无法准备游戏文件</translation>
+    </message>
+    <message>
+        <source>Game preparation failed. See the log for details.</source>
+        <translation>游戏文件准备失败，详情请查看日志。</translation>
+    </message>
+    <message>
+        <source>Convert to NUP</source>
+        <translation>转换为 NUP</translation>
+    </message>
+    <message>
+        <source>The target archive already exists:
+%1</source>
+        <translation>目标归档已存在：
+%1</translation>
+    </message>
+    <message>
+        <source>Resume Conversion</source>
+        <translation>继续转换</translation>
+    </message>
+    <message>
+        <source>Resume the interrupted conversion?</source>
+        <translation>要继续上次中断的转换吗？</translation>
+    </message>
+    <message>
+        <source>Conversion Complete</source>
+        <translation>转换完成</translation>
+    </message>
+    <message>
+        <source>The NUP was created and the loose folder was removed.</source>
+        <translation>NUP 已创建，解包文件夹已删除。</translation>
+    </message>
+    <message>
+        <source>The NUP was created. You can delete the loose folder if you no longer need it.</source>
+        <translation>NUP 已创建。如果不再需要解包文件夹，可以将其删除。</translation>
+    </message>
+    <message>
+        <source>Conversion Cancelled</source>
+        <translation>转换已取消</translation>
+    </message>
+    <message>
+        <source>The conversion can be resumed by choosing Convert to NUP again.</source>
+        <translation>再次选择“转换为 NUP”即可继续这次转换。</translation>
+    </message>
+    <message>
+        <source>Conversion Failed</source>
+        <translation>转换失败</translation>
+    </message>
+    <message>
+        <source>No Update Available</source>
+        <translation>没有可用更新</translation>
+    </message>
+    <message>
+        <source>You are running the latest build (%1).</source>
+        <translation>你正在使用最新版本（%1）。</translation>
+    </message>
+    <message>
+        <source>Updates Unavailable</source>
+        <translation>无法检查更新</translation>
+    </message>
+    <message>
+        <source>This build was not published as a release, so there are no updates to check for.</source>
+        <translation>此版本未作为正式发布版发布，因此没有可检查的更新。</translation>
+    </message>
+    <message>
+        <source>Update Check Failed</source>
+        <translation>检查更新失败</translation>
+    </message>
+    <message>
+        <source>Could not reach GitHub to check for updates. Please try again later.</source>
+        <translation>无法连接 GitHub 检查更新，请稍后再试。</translation>
     </message>
 </context>
 <context>
@@ -8752,8 +8896,8 @@ Proceed anyway?</source>
         <translation>长度需为 1-32 个字符</translation>
     </message>
     <message>
-        <source>Eglantine</source>
-        <translation>Eglantine</translation>
+        <source>Orchid</source>
+        <translation>Orchid</translation>
     </message>
 </context>
 <context>
@@ -10814,16 +10958,16 @@ By selecting &quot;From Eden&quot;, previous save data stored in Ryujinx will be
         <translation>OS 返回错误: %1</translation>
     </message>
     <message>
-        <source>From Eglantine</source>
-        <translation>来自 Eglantine</translation>
+        <source>From Orchid</source>
+        <translation>来自 Orchid</translation>
     </message>
     <message>
-        <source>Linking save data to Ryujinx lets both Ryujinx and Eglantine reference the same save files for your games.
+        <source>Linking save data to Ryujinx lets both Ryujinx and Orchid reference the same save files for your games.
 
-By selecting &quot;From Eglantine&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
-        <translation>将存档数据链接到 Ryujinx 后，Ryujinx 与 Eglantine 即可引用同一份游戏存档文件。
+By selecting &quot;From Orchid&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
+        <translation>将存档数据链接到 Ryujinx 后，Ryujinx 与 Orchid 即可引用同一份游戏存档文件。
 
-选择“来自 Eglantine”会删除 Ryujinx 中先前保存的存档数据；选择“来自 Ryujinx”则相反。</translation>
+选择“来自 Orchid”会删除 Ryujinx 中先前保存的存档数据；选择“来自 Ryujinx”则相反。</translation>
     </message>
 </context>
 <context>
@@ -10954,6 +11098,196 @@ Error code: %3</source>
         <location filename="../../src/yuzu/updater/update_dialog.cpp" line="173"/>
         <source>Successfully downloaded %1. Would you like to open it?</source>
         <translation>已成功下载 %1。您要打开它吗?</translation>
+    </message>
+    <message>
+        <source>%1 is available. You are running %2.</source>
+        <translation>有可用的 %1，你当前使用 %2。</translation>
+    </message>
+    <message>
+        <source>&lt;a href=&quot;%1&quot;&gt;View on GitHub&lt;/a&gt;</source>
+        <translation>&lt;a href=&quot;%1&quot;&gt;在 GitHub 上查看&lt;/a&gt;</translation>
+    </message>
+    <message>
+        <source>What&apos;s new</source>
+        <translation>更新内容</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n change(s) since your build:</source>
+        <translation><numerusform>自你当前版本以来有 %n 项变更：</numerusform></translation>
+    </message>
+    <message numerus="yes">
+        <source>Your build is more than %n change(s) behind. The newest ones:</source>
+        <translation><numerusform>你的版本落后超过 %n 项变更，以下是最新的几项：</numerusform></translation>
+    </message>
+    <message>
+        <source>The list of changes could not be loaded.</source>
+        <translation>无法加载变更列表。</translation>
+    </message>
+    <message>
+        <source>Compare your build with this release on GitHub</source>
+        <translation>在 GitHub 上比较你的版本与此发布版</translation>
+    </message>
+    <message>
+        <source>Download %1 now?</source>
+        <translation>现在下载 %1 吗？</translation>
+    </message>
+    <message>
+        <source>Open the release page to download it?</source>
+        <translation>要打开发布页面下载吗？</translation>
+    </message>
+    <message>
+        <source>Could not download %1.</source>
+        <translation>无法下载 %1。</translation>
+    </message>
+    <message>
+        <source>Could not download %1
+Error code: %2</source>
+        <translation>无法下载 %1
+错误代码：%2</translation>
+    </message>
+    <message>
+        <source>Successfully downloaded %1. Would you like to open its folder?</source>
+        <translation>已成功下载 %1。要打开所在文件夹吗？</translation>
+    </message>
+</context>
+<context>
+    <name>GameListWorker</name>
+    <message>
+        <source>Not scanned</source>
+        <translation>未扫描</translation>
+    </message>
+    <message>
+        <source>Folder size is not calculated during game discovery.</source>
+        <translation>扫描游戏时不会计算文件夹大小。</translation>
+    </message>
+</context>
+<context>
+    <name>IconDropZone</name>
+    <message>
+        <source>Drop an image here or click to browse</source>
+        <translation>把图片拖到这里，或点击选择</translation>
+    </message>
+    <message>
+        <source>Drop to replace</source>
+        <translation>松开以替换</translation>
+    </message>
+    <message>
+        <source>Release to use this image</source>
+        <translation>松开以使用这张图片</translation>
+    </message>
+    <message>
+        <source>Drop an icon here
+or click to browse</source>
+        <translation>把图标拖到这里
+或点击选择</translation>
+    </message>
+</context>
+<context>
+    <name>NupMetadataDialog</name>
+    <message>
+        <source>Choose Icon...</source>
+        <translation>选择图标...</translation>
+    </message>
+    <message>
+        <source>Use Detected</source>
+        <translation>使用检测到的图标</translation>
+    </message>
+    <message>
+        <source>Name shown in the game list</source>
+        <translation>显示在游戏列表中的名称</translation>
+    </message>
+    <message>
+        <source>Auto-detect (nothing found in the dump)</source>
+        <translation>自动检测（转储中没有找到可用信息）</translation>
+    </message>
+    <message>
+        <source>Auto-detect: %1 (from %2)</source>
+        <translation>自动检测：%1（来自 %2）</translation>
+    </message>
+    <message>
+        <source>Set manually:</source>
+        <translation>手动设置：</translation>
+    </message>
+    <message>
+        <source>e.g. 1.2.0</source>
+        <translation>例如 1.2.0</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>图标</translation>
+    </message>
+    <message>
+        <source>&lt;b&gt;Source&lt;/b&gt;&lt;br&gt;%1&lt;br&gt;&lt;b&gt;Target&lt;/b&gt;&lt;br&gt;%2</source>
+        <translation>&lt;b&gt;源&lt;/b&gt;&lt;br&gt;%1&lt;br&gt;&lt;b&gt;目标&lt;/b&gt;&lt;br&gt;%2</translation>
+    </message>
+    <message>
+        <source>Approximate space needed: %1 MB. Free on the target volume: %2 MB.</source>
+        <translation>预计需要约 %1 MB 空间，目标卷可用空间 %2 MB。</translation>
+    </message>
+    <message>
+        <source>Free space is less than the estimate.</source>
+        <translation>可用空间小于预计所需空间。</translation>
+    </message>
+    <message>
+        <source>Low storage: delete the original files as they are packed (cannot be undone)</source>
+        <translation>存储空间不足：打包过程中删除原始文件（无法撤销）</translation>
+    </message>
+    <message>
+        <source>Convert</source>
+        <translation>转换</translation>
+    </message>
+    <message>
+        <source>Choose Icon</source>
+        <translation>选择图标</translation>
+    </message>
+    <message>
+        <source>Images (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*)</source>
+        <translation>图片 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <source>That file could not be read as an image.</source>
+        <translation>无法将该文件作为图片读取。</translation>
+    </message>
+    <message>
+        <source>Custom icon, stored as %1x%1 JPEG.</source>
+        <translation>自定义图标，以 %1x%1 的 JPEG 保存。</translation>
+    </message>
+    <message>
+        <source>Icon found in the dump.</source>
+        <translation>在转储中找到了图标。</translation>
+    </message>
+    <message>
+        <source>No icon found in the dump. Add one, or the NUP will have none.</source>
+        <translation>转储中没有找到图标。请添加一个，否则 NUP 将没有图标。</translation>
+    </message>
+</context>
+<context>
+    <name>NupProgressDialog</name>
+    <message>
+        <source>Converting to NUP</source>
+        <translation>正在转换为 NUP</translation>
+    </message>
+    <message>
+        <source>Preparing...</source>
+        <translation>正在准备...</translation>
+    </message>
+    <message>
+        <source>%1%</source>
+        <translation>%1%</translation>
+    </message>
+    <message>
+        <source>%1 / %2 MB  -  %3 / %4 files</source>
+        <translation>%1 / %2 MB  -  %3 / %4 个文件</translation>
+    </message>
+    <message>
+        <source>
+%1 MB/s  -  about %2:%3 left</source>
+        <translation>
+%1 MB/s  -  约剩 %2:%3</translation>
+    </message>
+    <message>
+        <source>Cancelling...</source>
+        <translation>正在取消...</translation>
     </message>
 </context>
 </TS>
