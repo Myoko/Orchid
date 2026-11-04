@@ -37,6 +37,7 @@ add_executable(tests
     core/internal_network/socket_proxy.cpp
     core/nup_writer.cpp
     core/priority_queue.cpp
+    core/vfs_vector.cpp
     core/internal_network/network.cpp
     video_core/memory_tracker.cpp
     video_core/memory_budget.cpp
@@ -78,6 +79,7 @@ add_executable(tests
     video_core/uniform_stream_reuse.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
+    video_core/usage_tracker.cpp
     input_common/calibration_configuration_job.cpp
 )
 

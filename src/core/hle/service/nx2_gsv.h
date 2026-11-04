@@ -1616,14 +1616,20 @@ private:
                 m_stats.hitches += frame > 100'000 ? 1 : 0;
             }
             m_stats.last_present = entered;
-            if (++m_stats.presents == 600) {
+            // EDEN_NX2_PRESENT_STATS=<n> averages over n presents instead (shorter benchmark windows).
+            static const u32 window = [] {
+                const char* value = std::getenv("EDEN_NX2_PRESENT_STATS");
+                const unsigned long parsed = value != nullptr ? std::strtoul(value, nullptr, 10) : 0;
+                return parsed >= 2 ? static_cast<u32>(parsed) : 600u;
+            }();
+            if (++m_stats.presents == window) {
                 LOG_INFO(Service,
-                         "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms), "
+                         "nx2:vi2 last {} presents: frame {} us (max {}, {} over 100 ms), "
                          "blocked on the GPU fence {} us (max {}), composite {} us, vblank "
                          "pacing {} us",
-                         m_stats.frame_us / 599, m_stats.max_frame_us, m_stats.hitches,
-                         m_stats.fence_us / 600, m_stats.max_fence_us, m_stats.composite_us / 600,
-                         m_stats.pace_us / 600);
+                         window, m_stats.frame_us / (window - 1), m_stats.max_frame_us,
+                         m_stats.hitches, m_stats.fence_us / window, m_stats.max_fence_us,
+                         m_stats.composite_us / window, m_stats.pace_us / window);
                 m_stats = {.last_present = entered};
             }
         }

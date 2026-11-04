@@ -45,6 +45,30 @@ constexpr std::array<const char*, 14> EXEFS_FILE_NAMES{
     "subsdk3", "subsdk4",   "subsdk5", "subsdk6", "subsdk7", "subsdk8", "subsdk9",
 };
 
+// Built-in patches behind Settings::fps30_patch, matched by NSO build ID (trailing zeros trimmed).
+// Offsets are module offsets of a 4-byte instruction, checked against `expected` before patching.
+struct BuiltinPatch {
+    std::string_view build_id;
+    u32 offset;
+    u32 expected;
+    u32 replacement;
+};
+
+constexpr std::array FPS30_PATCHES{
+    // Donkey Kong Bananza 1.1.0 main: its frame-rate controller picks the swap interval as
+    // clamp(measured vblanks + 1, min, max) and steps the game by 60 / interval; picking 2
+    // (`csel w10, w8, w9, lt` -> `mov w10, #2`) holds it at 30 fps at full speed.
+    BuiltinPatch{"E25C90C1C136638885659FD55BF8A03B3403489D", 0x204ac4, 0x1a89b10a, 0x5280004a},
+};
+
+const BuiltinPatch* FindFps30Patch(std::string_view build_id) {
+    if (!Settings::values.fps30_patch.GetValue()) {
+        return nullptr;
+    }
+    const auto it = std::ranges::find(FPS30_PATCHES, build_id, &BuiltinPatch::build_id);
+    return it != FPS30_PATCHES.end() ? &*it : nullptr;
+}
+
 enum class TitleVersionFormat : u8 {
     ThreeElements, ///< vX.Y.Z
     FourElements,  ///< vX.Y.Z.W
@@ -332,7 +356,10 @@ VirtualDir PatchManager::PatchExeFS(VirtualDir exefs) const {
     const auto load_dir = GetModificationLoadRoot();
     const auto sdmc_load_dir = GetModificationLoadRoot(true);
 
-    std::vector<VirtualDir> patch_dirs = {sdmc_load_dir};
+    std::vector<VirtualDir> patch_dirs;
+    if (sdmc_load_dir != nullptr) {
+        patch_dirs.push_back(sdmc_load_dir);
+    }
     if (load_dir != nullptr) {
         const auto load_patch_dirs = load_dir->GetSubdirectories();
         patch_dirs.insert(patch_dirs.end(), load_patch_dirs.begin(), load_patch_dirs.end());
@@ -431,10 +458,26 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
 
     LOG_INFO(Loader, "Patching NSO for name={}, build_id={}", name, build_id);
 
+    auto base = nso;
+    if (const auto* patch = FindFps30Patch(build_id)) {
+        const size_t at = sizeof(Loader::NSOHeader) + patch->offset;
+        u32 word{};
+        if (at + sizeof(word) <= base.size()) {
+            std::memcpy(&word, base.data() + at, sizeof(word));
+        }
+        if (word == patch->expected) {
+            std::memcpy(base.data() + at, &patch->replacement, sizeof(word));
+            LOG_INFO(Loader, "    - Applying built-in 30 FPS patch");
+        } else {
+            LOG_WARNING(Loader, "    - Built-in 30 FPS patch skipped: {:#010x} at {:#x}, expected {:#010x}",
+                        word, patch->offset, patch->expected);
+        }
+    }
+
     const auto load_dir = GetModificationLoadRoot();
     if (load_dir == nullptr) {
         LOG_ERROR(Loader, "Cannot load mods for invalid title_id={:016X}", title_id);
-        return nso;
+        return base;
     }
 
     auto patch_dirs = load_dir->GetSubdirectories();
@@ -442,7 +485,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
               [](const VirtualDir& l, const VirtualDir& r) { return l->GetName() < r->GetName(); });
     const auto patches = CollectPatches(patch_dirs, build_id);
 
-    auto out = nso;
+    auto out = base;
     for (const auto& patch_file : patches) {
         if (patch_file->GetExtension() == "ips") {
             LOG_INFO(Loader, "    - Applying IPS patch from mod \"{}\"",
@@ -473,6 +516,10 @@ bool PatchManager::HasNSOPatch(const BuildID& build_id_, std::string_view name) 
     const auto build_id = build_id_raw.substr(0, build_id_raw.find_last_not_of('0') + 1);
 
     LOG_INFO(Loader, "Querying NSO patch existence for build_id={}, name={}", build_id, name);
+
+    if (FindFps30Patch(build_id) != nullptr) {
+        return true;
+    }
 
     const auto load_dir = GetModificationLoadRoot();
     if (load_dir == nullptr) {
@@ -538,8 +585,12 @@ void PatchManager::ApplyLayeredFS(VirtualFile& romfs, ContentRecordType type) co
     }
 
     const auto disabled = GetDisabledAddons();
-    std::vector<VirtualDir> patch_dirs = load_dir->GetSubdirectories();
-    if (std::find(disabled.cbegin(), disabled.cend(), "SDMC") == disabled.cend()) {
+    std::vector<VirtualDir> patch_dirs;
+    if (load_dir != nullptr) {
+        patch_dirs = load_dir->GetSubdirectories();
+    }
+    if (std::find(disabled.cbegin(), disabled.cend(), "SDMC") == disabled.cend() &&
+        sdmc_load_dir != nullptr) {
         patch_dirs.push_back(sdmc_load_dir);
     }
     std::sort(patch_dirs.begin(), patch_dirs.end(),

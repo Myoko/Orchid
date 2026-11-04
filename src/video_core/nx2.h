@@ -148,23 +148,15 @@ void Nx2SynchronizeGpuWrittenCommands(GPUVAddr address, size_t size, Drain&& dra
 /// Whether the GPU thread split's front may check a command list's GPU-written page bits before
 /// waiting for the back, once no page has been marked for the first time in a while
 /// (DmaPusher::FlushGpuWrittenCommands). Draining first for every GPFIFO entry stalled Mario Tennis
-/// Fever's front ~40% of the time; checking first misses only a page's very first GPU write while
-/// it is still queued on the back. EDEN_NX2_CMD_DRAIN=1 always drains first, =0 checks first for
-/// every title.
+/// Fever's front ~40% of the time and serialized Donkey Kong Bananza's front and back (~270,000
+/// drains a second); checking first misses only a page's very first GPU write while it is still
+/// queued on the back. EDEN_NX2_CMD_DRAIN=1 always drains first.
 inline bool Nx2CheckCommandPagesFirst() {
-    static const int forced = [] {
+    static const bool drain_first = [] {
         const char* value = std::getenv("EDEN_NX2_CMD_DRAIN");
-        return value == nullptr ? -1 : (value[0] == '0' ? 1 : 0);
+        return value != nullptr && value[0] == '1';
     }();
-    if (forced >= 0) {
-        return forced == 1;
-    }
-    switch (g_nx2_program_id.load(std::memory_order_relaxed)) {
-    case 0x0400D4201C6EA000ULL: // Mario Tennis Fever
-        return true;
-    default:
-        return false;
-    }
+    return !drain_first;
 }
 
 /// Whether acquires that a release still queued for the split's back meets skip the drain

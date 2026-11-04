@@ -26,6 +26,7 @@ Mario Tennis Fever first, plus the shader, kernel and graphics work other games 
 <p align="center">
   <a href="#branches-and-builds">Branches and builds</a> |
   <a href="#what-orchid-adds">What Orchid adds</a> |
+  <a href="#performance-and-compatibility">Performance</a> |
   <a href="#download">Download</a> |
   <a href="#build-the-newest-commit-yourself">Build it yourself</a> |
   <a href="#documentation">Documentation</a> |
@@ -63,6 +64,34 @@ Compared with the Eglantine it started from:
   locking changes). Faster on some systems, less tested.
 - **Updates:** release builds check this repository for updates and only offer builds of their
   own channel.
+
+## Performance and compatibility
+
+> [!NOTE]
+> Measured by hand in November 2026 on one PC: AMD Ryzen 7 5800X3D, AMD Radeon RX 9070 XT,
+> 32 GB RAM, CachyOS (Linux 7.x, Mesa RADV from git), 1x resolution scaling. Other hardware
+> will differ.
+
+| Game | FPS | Notes |
+|---|---|---|
+| Hyrule Warriors: Age of Imprisonment | 60 | after shader compilation |
+| Donkey Kong Bananza | 30, 15-25 in heavy areas | 30 in lighter areas |
+| Mario Kart World | 30-40 | lots of off-track asset glitches |
+| Mario Tennis Fever | 60 | runs flawlessly |
+| Yoshi and the Mysterious Book | | gameplay renders a black screen |
+| Super Mario Bros. Wonder | 60 | runs flawlessly |
+| Star Fox | 30 | crashes very quickly |
+| Splatoon Raiders | 30 | in gameplay |
+| Pokémon Pokopia | 60 | in gameplay |
+| Pokémon Legends: Z-A | 30 | in gameplay, the Switch 1 frame cap |
+| Orbitals | | does not launch |
+| Nintendo Switch Sports Resort | 60 | broken lighting, broken controller selection |
+| Nintendo Switch 2 Welcome Tour | 30 | your own character is fully black |
+| Metroid Prime 4: Beyond | 60 | until it crashes early on |
+| Kirby Air Riders | | crashes while loading a race |
+| Fire Emblem: Fortune's Weave | 30 | in the first fight, large graphics glitches top left |
+| Fast Fusion | | stuck loading into a race, then the emulator crashes |
+| Drag x Drive | | no controller support, not playable |
 
 ## Download
 
@@ -153,6 +182,13 @@ source and author in its message.
   adamhahnHU and arisqz (sparse layered images), Pavel Barabanov and andrewleeog (F2I bits, host1x
   syncpoint actions), MFS-code (Switch 2 GOB order), CarlosKeese and Dennys Kaluzny Pereira
   (lowering), failaip12 (memory manager bounds).
+- After 0.6.3: godpow and its contributors nowhere02, xDarkWindx, Duck912, ZnOw01 and CloudP4bbs
+  (buffer, texture and staging cache guards, descriptor growth, GPU split wake-up recovery, NPad
+  update filter), failaip12 via cira0100 (data races, UBSan fixes, audio and SDL locking),
+  monteger8 for adamd (Donkey Kong Bananza buffer cache skips, indirect draw reset by hash), Aidan
+  Kinzett (NV12 video decoder), Jonas via jojo-chaechae (x64 call reach, Switch 2 channel setup),
+  SavageCore (mod root guards), cblock85, christianball123, Khobzpro, larryliu985, Doughston
+  (n-popescu) and Xnos666.
 - rdenno: the Mario Tennis Fever fixes in 0.5.1.
 
 ## License

@@ -390,15 +390,17 @@ void TextureCache<P>::TickFrame() {
         }
         total_used_memory -= (std::min)(total_used_memory, gpu_sentenced_bytes);
     }
-    // Every 600 frames: device memory in use against the collector's thresholds, and what the
-    // images themselves account for (VRAM pressure makes the collector thrash).
-    if (static u64 frames{}; ++frames % 600 == 0) {
+    // Every 600 frames: device memory in use against the collector's thresholds.
+    // Skip expensive heap allocation, map construction, and sorting unless debug logging is explicitly enabled.
+    static const bool log_tc = std::getenv("EDEN_NX2_TC_LOG") != nullptr;
+    static u64 frames{};
+    if (log_tc && ++frames % 600 == 0) {
         u64 image_bytes{};
         size_t images{};
         std::vector<std::pair<u64, const Image*>> largest;
         std::map<u32, std::pair<u64, u32>> by_format;
         for (const auto [image_id, image] : slot_images) {
-            const u64 bytes = GetScaledImageSizeBytes(*image);
+            const u64 bytes = ImageMemoryBytes(*image);
             image_bytes += bytes;
             ++images;
             largest.emplace_back(bytes, image);
@@ -534,6 +536,10 @@ void TextureCache<P>::FillImageViews(std::span<ImageViewInOut> views, bool compu
             if (blacklist) {
                 if (view.blacklist && view.id != NULL_IMAGE_VIEW_ID) {
                     const ImageViewBase& image_view = slot_image_views[view.id];
+                    // Buffer views have no backing image.
+                    if (image_view.image_id == NULL_IMAGE_ID) {
+                        continue;
+                    }
                     auto& image = slot_images[image_view.image_id];
                     has_blacklisted |= ScaleDown(image);
                     image.scale_rating = 0;
@@ -2451,6 +2457,15 @@ u64 TextureCache<P>::ImageMemoryBytes(const Image& image) const {
         }
         return 0;
     }
+    // What the host image really takes where the runtime knows it: a trimmed image
+    // (reduce_texture_resolution) takes a quarter of its guest size. Counted at guest size, Mario
+    // Kart World's trimmed terrain arrays kept the total over the critical limit for whole races,
+    // and the collector evicted (and re-uploaded) thousands of textures every few seconds.
+    if constexpr (requires { image.HostMemoryBytes(); }) {
+        if (const std::optional<u64> host_bytes = image.HostMemoryBytes()) {
+            return Common::AlignUp(*host_bytes, 1024);
+        }
+    }
     u64 tentative_size = (std::max)(image.guest_size_bytes, image.unswizzled_size_bytes);
     if ((IsPixelFormatASTC(image.info.format) &&
          True(image.flags & ImageFlagBits::AcceleratedUpload)) ||
@@ -2950,6 +2965,11 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         DeleteImage(copy_object.id);
     }
 
+    NoteAliasTick(new_image);
+    for (const AliasedImage& alias : new_image.aliased_images) {
+        new_image.alias_modification_tick = (std::max)(new_image.alias_modification_tick,
+                                                       slot_images[alias.id].modification_tick);
+    }
     RegisterImage(new_image_id);
     return new_image_id;
 }
@@ -3151,6 +3171,9 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
 
 template <class P>
 ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr) {
+    if (info.size.width == 0 || info.size.height == 0 || info.size.depth == 0) {
+        return NULL_IMAGE_VIEW_ID;
+    }
     ImageId image_id{};
     bool delete_state = has_deleted_images;
     bool replaced_unwritten = false;
@@ -3918,6 +3941,7 @@ template <class P>
 void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
     image.flags |= ImageFlagBits::GpuModified;
     image.modification_tick = ++modification_tick;
+    NoteAliasTick(image);
     if (g_yo.enabled) {
         g_yo.NoteModified(image.cpu_addr);
     }
@@ -3935,9 +3959,22 @@ void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
 }
 
 template <class P>
+void TextureCache<P>::NoteAliasTick(const ImageBase& image) {
+    for (const AliasedImage& alias : image.aliased_images) {
+        ImageBase& aliased_image = slot_images[alias.id];
+        aliased_image.alias_modification_tick =
+            (std::max)(aliased_image.alias_modification_tick, image.modification_tick);
+    }
+}
+
+template <class P>
 void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
-    boost::container::small_vector<const AliasedImage*, 8> aliased_images;
     Image& image = slot_images[image_id];
+    // Sampled images with hundreds of aliases walked them all for every draw.
+    if (image.modification_tick >= image.alias_modification_tick) {
+        return;
+    }
+    boost::container::small_vector<const AliasedImage*, 8> aliased_images;
     bool any_rescaled = True(image.flags & ImageFlagBits::Rescaled);
     bool any_modified = True(image.flags & ImageFlagBits::GpuModified);
     u64 most_recent_tick = image.modification_tick;
@@ -3962,6 +3999,7 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
         }
     }
     image.modification_tick = most_recent_tick;
+    NoteAliasTick(image);
     if (any_modified) {
         image.flags |= ImageFlagBits::GpuModified;
     }

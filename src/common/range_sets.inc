@@ -198,6 +198,7 @@ RangeSet<AddressType>::RangeSet(RangeSet&& other) {
     // A moved-from container is only "valid but unspecified", and callers keep adding to the
     // source after handing its ranges over (BufferCache::AccumulateFlushes).
     other.m_impl->m_ranges_set.clear();
+    ++other.m_removals;
 }
 
 template <typename AddressType>
@@ -205,6 +206,8 @@ RangeSet<AddressType>& RangeSet<AddressType>::operator=(RangeSet&& other) {
     if (this != &other) {
         m_impl->m_ranges_set = std::move(other.m_impl->m_ranges_set);
         other.m_impl->m_ranges_set.clear();
+        ++m_removals;
+        ++other.m_removals;
     }
     return *this;
 }
@@ -216,17 +219,30 @@ void RangeSet<AddressType>::Add(AddressType base_address, size_t size) {
 
 template <typename AddressType>
 void RangeSet<AddressType>::Subtract(AddressType base_address, size_t size) {
+    ++m_removals;
     m_impl->Subtract(base_address, size);
 }
 
 template <typename AddressType>
 void RangeSet<AddressType>::Clear() {
+    ++m_removals;
     m_impl->m_ranges_set.clear();
 }
 
 template <typename AddressType>
 bool RangeSet<AddressType>::Empty() const {
     return m_impl->m_ranges_set.empty();
+}
+
+template <typename AddressType>
+bool RangeSet<AddressType>::Contains(AddressType base_address, size_t size) const {
+    const auto& set = m_impl->m_ranges_set;
+    if (set.empty() || size == 0) {
+        return false;
+    }
+    const AddressType end_address = base_address + static_cast<AddressType>(size);
+    const auto it = set.find(base_address);
+    return it != set.end() && it->lower() <= base_address && it->upper() >= end_address;
 }
 
 template <typename AddressType>

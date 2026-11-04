@@ -133,6 +133,8 @@ struct ImageBase {
     VAddr cpu_addr_end = 0;
 
     u64 modification_tick = 0;
+    /// Newest modification tick of any image in aliased_images (TextureCache::NoteAliasTick).
+    u64 alias_modification_tick = 0;
     size_t lru_index = SIZE_MAX;
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};

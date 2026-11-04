@@ -1012,7 +1012,17 @@ void BufferCache<P>::BindHostVertexBuffers() {
             const Binding& binding = VertexBufferSlot(index);
             Buffer& buffer = slot_buffers[binding.buffer_id];
             TouchBuffer(buffer, binding.buffer_id);
-            SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+            // Checking every page of a large vertex buffer for CPU writes cost 7% of Bananza's
+            // draw time; none of them became CPU modified since the last check: skip it.
+            Nx2SyncedVertexBuffer& synced = nx2_synced_vertex_buffers[index];
+            const u64 epoch = Nx2DrawTuning()
+                                  ? memory_tracker.CpuWriteEpoch(binding.device_addr, binding.size)
+                                  : ~u64{0};
+            if (epoch == ~u64{0} || synced.epoch != epoch || synced.buffer_id != binding.buffer_id ||
+                synced.device_addr != binding.device_addr || synced.size != binding.size) {
+                SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+                synced = {binding.buffer_id, binding.device_addr, binding.size, epoch};
+            }
             if (!flags[Dirty::VertexBuffer0 + index]) {
                 flush_bindings();
                 continue;
@@ -1268,6 +1278,15 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
         if (std::ranges::any_of(segments,
                                 [](const MultiRangeSegment& segment) { return !segment.buffer_id; })) {
             return false;
+        }
+        // A segment whose buffer was joined into another (deleted) since it was resolved: binding
+        // the dead slot put its freed LRU item back in the list, and the collector later deleted
+        // the slot again, wiping another buffer's page entries.
+        for (u32 index = 0; index < binding.segment_count; ++index) {
+            const BufferId id = pool[binding.segment_first + index].buffer_id;
+            if (!id || !slot_buffers.contains(id)) [[unlikely]] {
+                return false;
+            }
         }
         const u64 key = (static_cast<u64>(gpu_memory->GetID()) << 48) ^ binding.gpu_addr;
         runtime.ResetMultiRange();
@@ -1550,6 +1569,27 @@ void BufferCache<P>::DoUpdateComputeBuffers() {
 }
 
 template <class P>
+void BufferCache<P>::RefreshMultiRangeSegments(std::vector<MultiRangeSegment>& pool) {
+    if constexpr (requires { runtime.BindMultiRangeStorageBuffer(u64{}, bool{}); }) {
+        // Resolving one segment can join, and so delete, the buffer of another (DeleteBuffer
+        // clears its id): repeat until every segment points at a live buffer.
+        for (int pass = 0; pass < 16; ++pass) {
+            bool resolved = false;
+            for (MultiRangeSegment& segment : pool) {
+                if (!segment.buffer_id) {
+                    segment.buffer_id = FindBuffer(segment.device_addr, segment.size,
+                                                   runtime.PrefersSparseSources());
+                    resolved = true;
+                }
+            }
+            if (!resolved) {
+                return;
+            }
+        }
+    }
+}
+
+template <class P>
 void BufferCache<P>::UpdateIndexBuffer() {
     // We have to check for the dirty flags and index count
     // The index count is currently changed without updating the dirty flags
@@ -1564,10 +1604,14 @@ void BufferCache<P>::UpdateIndexBuffer() {
         auto inline_index_size = static_cast<u32>(draw_state.inline_index_draw_indexes.size());
         u32 buffer_size = Common::AlignUp(inline_index_size, CACHING_PAGESIZE);
         if (inline_buffer_id == NULL_BUFFER_ID) [[unlikely]] {
+            LOG_INFO(HW_GPU, "Creating inline index buffer of {:#x} bytes", buffer_size);
             inline_buffer_id = CreateBuffer(0, buffer_size, false);
         }
         if (slot_buffers[inline_buffer_id].SizeBytes() < buffer_size) [[unlikely]] {
-            slot_buffers.erase(inline_buffer_id);
+            LOG_INFO(HW_GPU, "Growing inline index buffer to {:#x} bytes", buffer_size);
+            // Erasing the slot directly left its page table entries and LRU item behind, so a
+            // later CreateBuffer could reuse the slot and join the new buffer with itself.
+            DeleteBuffer(inline_buffer_id, true);
             inline_buffer_id = CreateBuffer(0, buffer_size, false);
         }
         channel_state->index_buffer = Binding{
@@ -1617,9 +1661,16 @@ void BufferCache<P>::UpdateVertexBuffer(u32 index) {
     const auto& limit = maxwell3d->regs.vertex_stream_limits[index];
     const GPUVAddr gpu_addr_begin = array.Address();
     const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
-    const u64 native_size = native ? maxwell3d->regs.NativeVertexStreamSize(index) : 0;
+    u64 native_size = native ? maxwell3d->regs.NativeVertexStreamSize(index) : 0;
     if (native && array.enable != 0 && native_size > (std::numeric_limits<u32>::max)()) {
-        throw std::runtime_error("Native vertex stream exceeds supported 32-bit buffer size");
+        // A misread or stale size: bounded by what's mapped below instead. Thrown on the GPU
+        // thread, it aborted Mario Kart World as it booted.
+        static std::atomic<u32> reports{};
+        if (reports.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_WARNING(HW_GPU, "Native vertex stream {} size {:#x} exceeds 32 bits, clamped", index,
+                        native_size);
+        }
+        native_size = (std::numeric_limits<u32>::max)();
     }
     const GPUVAddr gpu_addr_end = native ? gpu_addr_begin + native_size : limit.Address() + 1;
     const std::optional<DAddr> device_addr = gpu_memory->GpuToCpuAddress(gpu_addr_begin);
@@ -1787,7 +1838,8 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     }
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
-    gpu_modified_ranges.Add(device_addr, size);
+    Nx2AddRangeOnce(gpu_modified_ranges, nx2_recent_gpu_ranges, nx2_recent_gpu_next, device_addr,
+                    size);
     QueueDownload(device_addr, size);
     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         Tegra::Nx2MarkGpuWritten(device_addr, size);
@@ -2061,6 +2113,18 @@ typename BufferCache<P>::OverlapResult BufferCache<P>::ResolveOverlaps(DAddr dev
         if (!overlap_id) {
             continue;
         }
+        if (!slot_buffers.contains(overlap_id)) [[unlikely]] {
+            // A deleted buffer is still in the page table. Joining it would delete whichever
+            // buffer reuses the slot next, possibly the one being created here.
+            static u32 stale_logs = 0;
+            if (stale_logs < 16) {
+                ++stale_logs;
+                LOG_ERROR(HW_GPU, "Stale buffer page: device_addr={:#x} buffer_id={}",
+                          device_addr, overlap_id.index);
+            }
+            page_table[device_addr >> CACHING_PAGEBITS] = BufferId{};
+            continue;
+        }
         Buffer& overlap = slot_buffers[overlap_id];
         if (overlap.IsPicked()) {
             continue;
@@ -2125,6 +2189,9 @@ void BufferCache<P>::JoinOverlap(BufferId new_buffer_id, BufferId overlap_id,
 template <class P>
 BufferId BufferCache<P>::CreateBuffer(DAddr device_addr, u32 wanted_size,
                                       bool sparse_compatible) {
+    // The synchronized-range tables hold Buffer pointers and ids that this may move or reuse.
+    nx2_synced_ranges.fill({});
+    nx2_synced_vertex_buffers.fill({});
     DAddr device_addr_end = Common::AlignUp(device_addr + wanted_size, CACHING_PAGESIZE);
     device_addr = Common::AlignDown(device_addr, CACHING_PAGESIZE);
     wanted_size = static_cast<u32>(device_addr_end - device_addr);
@@ -2166,7 +2233,11 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
     } else {
         buffer_bytes -= Common::AlignUp(size, 1024);
         total_used_memory -= Common::AlignUp(size, 1024);
-        lru_cache.Free(buffer.getLRUID());
+        // Only a registered buffer has an LRU item (freeing SIZE_MAX crashed in Free).
+        if (buffer.getLRUID() != SIZE_MAX) {
+            lru_cache.Free(buffer.getLRUID());
+            buffer.setLRUID(SIZE_MAX);
+        }
     }
     const DAddr device_addr_begin = buffer.CpuAddr();
     const DAddr device_addr_end = device_addr_begin + size;
@@ -2175,7 +2246,8 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
     for (u64 page = page_begin; page != page_end; ++page) {
         if constexpr (insert) {
             page_table[page] = buffer_id;
-        } else {
+        } else if (page_table[page] == buffer_id) {
+            // Only its own entries: another buffer's would go stale.
             page_table[page] = BufferId{};
         }
     }
@@ -2183,13 +2255,38 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
 
 template <class P>
 void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-    if (buffer_id != NULL_BUFFER_ID) {
+    if (buffer_id != NULL_BUFFER_ID && buffer.getLRUID() != SIZE_MAX) {
         lru_cache.Touch(buffer.getLRUID(), frame_tick);
     }
 }
 
 template <class P>
 bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size) {
+    if (!Nx2DrawTuning() || size == 0) {
+        return SynchronizeBufferPages(buffer, device_addr, size);
+    }
+    // No page of the range became CPU modified since this buffer's range was last checked: there
+    // is nothing to upload (the check walks every page; Bananza binds the same buffers thousands
+    // of times a frame).
+    const u64 epoch = memory_tracker.CpuWriteEpoch(device_addr, size);
+    if (epoch == ~u64{0}) {
+        return SynchronizeBufferPages(buffer, device_addr, size);
+    }
+    const size_t slot_index =
+        static_cast<size_t>(((device_addr >> 6) ^ (device_addr >> 20) ^ size) %
+                            nx2_synced_ranges.size());
+    Nx2SyncedRange& slot = nx2_synced_ranges[slot_index];
+    if (slot.buffer == &buffer && slot.device_addr == device_addr && slot.size == size &&
+        slot.epoch == epoch) {
+        return true;
+    }
+    const bool synchronized = SynchronizeBufferPages(buffer, device_addr, size);
+    slot = {&buffer, device_addr, size, epoch};
+    return synchronized;
+}
+
+template <class P>
+bool BufferCache<P>::SynchronizeBufferPages(Buffer& buffer, DAddr device_addr, u32 size) {
 #ifdef __ANDROID__
     const bool use_optimized_vertex_buffers = Settings::values.use_optimized_vertex_buffers.GetValue();
 #else
@@ -2472,6 +2569,12 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64
 
 template <class P>
 void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
+    nx2_synced_ranges.fill({});
+    nx2_synced_vertex_buffers.fill({});
+    if (buffer_id == inline_buffer_id) {
+        // The garbage collector can delete the inline index buffer; recreate it on next use.
+        inline_buffer_id = NULL_BUFFER_ID;
+    }
     if constexpr (requires { runtime.OnBufferDeleted(slot_buffers[buffer_id]); }) {
         runtime.OnBufferDeleted(slot_buffers[buffer_id]);
     }
@@ -2491,6 +2594,14 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     if (channel_state->index_buffer.buffer_id == buffer_id) {
         channel_state->index_buffer.buffer_id = BufferId{};
         dirty_index = true;
+    }
+    // Multi-range storage segments too: the update pass resolves them again.
+    for (auto* const pool : {&graphics_segments, &compute_segments}) {
+        for (MultiRangeSegment& segment : *pool) {
+            if (segment.buffer_id == buffer_id) {
+                segment.buffer_id = BufferId{};
+            }
+        }
     }
 
     for (u32 index = 0; index < channel_state->vertex_buffers.size(); index++) {

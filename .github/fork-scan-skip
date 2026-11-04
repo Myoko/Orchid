@@ -16,6 +16,10 @@ f28449539 sylvieistaken/selevet-eglantine: covered by Nx2SynchronizeGpuWrittenCo
 e902aca64 sylvieistaken/selevet-eglantine: already in Orchid via 9c34939757
 64685fe34 sylvieistaken/selevet-eglantine: build target choice
 53c39dfed sylvieistaken/selevet-eglantine: merge of Djihads80 build-104
+660e5f003 Djihads80/Eglantine: split-thread submit batching, the front touches back-owned caches after a drain
+313463cd2 Djihads80/Eglantine: builds on the 660e5f003 submit batching, same race
+55274de6a Djihads80/Eglantine: builds on the 660e5f003 submit batching, same race
+9960298c9 zortos293/Eglantine: moves only two of the front-side drain sites to the back thread
 # Forks
 002805e1d monteger8/Eglantine-DKB: follow-up of 461015ea5
 0322162c1 CarlosKeese/Eglantine: VOTEU mapped uniform target already in Orchid

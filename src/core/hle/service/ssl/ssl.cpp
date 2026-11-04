@@ -641,7 +641,8 @@ private:
 
 class ISslServiceForSystem final : public ServiceFramework<ISslServiceForSystem> {
     public:
-        explicit ISslServiceForSystem(Core::System& system_) : ServiceFramework{system_, "ssl:s"} {
+        explicit ISslServiceForSystem(Core::System& system_)
+            : ServiceFramework{system_, "ssl:s"}, cert_store{system_} {
             // clang-format off
             static const FunctionInfo functions[] = {
                 {0, &ISslServiceForSystem::CreateContext, "CreateContext"},
@@ -691,21 +692,19 @@ class ISslServiceForSystem final : public ServiceFramework<ISslServiceForSystem>
             return ResultSuccess;
         };
 
-        Result GetCertificates() {
-            LOG_DEBUG(Service_SSL, "(STUBBED) called.");
+        Result GetCertificates(Out<u32> out_num_entries,
+                               OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                               InArray<CaCertificateId, BufferAttr_HipcMapAlias> certificate_ids) {
+            LOG_INFO(Service_SSL, "ssl:s certificate request");
+            R_RETURN(cert_store.GetCertificates(out_num_entries, out_buffer, certificate_ids));
+        }
 
-            // TODO (jarrodnorwell)
-
-            return ResultSuccess;
-        };
-
-        Result GetCertificateBufSize() {
-            LOG_DEBUG(Service_SSL, "(STUBBED) called.");
-
-            // TODO (jarrodnorwell)
-
-            return ResultSuccess;
-        };
+        Result GetCertificateBufSize(
+            Out<u32> out_size, InArray<CaCertificateId, BufferAttr_HipcMapAlias> certificate_ids) {
+            LOG_INFO(Service_SSL, "ssl:s certificate buffer size request");
+            u32 num_entries;
+            R_RETURN(cert_store.GetCertificateBufSize(out_size, &num_entries, certificate_ids));
+        }
 
         Result DebugIoctl() {
             LOG_DEBUG(Service_SSL, "(STUBBED) called.");
@@ -774,6 +773,9 @@ class ISslServiceForSystem final : public ServiceFramework<ISslServiceForSystem>
 
             return ResultSuccess;
         };
+
+    private:
+        CertStore cert_store;
     };
 
 void LoopProcess(Core::System& system) {

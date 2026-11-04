@@ -736,8 +736,8 @@ Errno BSD_USA::GetPeerNameImpl(s32 fd, std::vector<u8>& write_buffer) {
     }
     const SockAddrIn guest_addrin = Translate(addr_in);
 
-    ASSERT(write_buffer.size() >= sizeof(guest_addrin));
-    write_buffer.resize(sizeof(guest_addrin));
+    // Games may pass a plain 16-byte sockaddr_in buffer; fill what fits, as BSD does.
+    write_buffer.resize((std::min)(write_buffer.size(), std::size_t{guest_addrin.len}));
     PutValue(write_buffer, guest_addrin);
     return Translate(bsd_errno);
 }
@@ -754,8 +754,8 @@ Errno BSD_USA::GetSockNameImpl(s32 fd, std::vector<u8>& write_buffer) {
     }
     const SockAddrIn guest_addrin = Translate(addr_in);
 
-    ASSERT(write_buffer.size() >= sizeof(guest_addrin));
-    write_buffer.resize(sizeof(guest_addrin));
+    // Games may pass a plain 16-byte sockaddr_in buffer; fill what fits, as BSD does.
+    write_buffer.resize((std::min)(write_buffer.size(), std::size_t{guest_addrin.len}));
     PutValue(write_buffer, guest_addrin);
     return Translate(bsd_errno);
 }

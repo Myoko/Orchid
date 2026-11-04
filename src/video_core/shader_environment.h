@@ -189,6 +189,7 @@ private:
         /// detached.
         std::vector<Tegra::Texture::TICEntry> texture_pool;
         bool via_header_index{};
+        bool native_tiling{}; ///< Switch 2: handles may hold a header byte offset (TextureHeaderIndex)
 
         u32 viewport_scale_offset_enabled{};
         ::Common::unordered_map<u64, Tegra::Engines::Maxwell3D::HLEReplacementAttributeType>
