@@ -1,50 +1,54 @@
-## What's new in 0.7.0
+## What's new in 0.7.1
 
-0.7.0 brings Star Fox to its first rendered frames, recommended settings for four Switch 2 titles,
-Donkey Kong Bananza speed work and about 50 fixes from Eglantine forks. Each ported fix names its
-source and author in its commit, and the README lists the forks under Credits. The README also has
-a new performance and compatibility table.
+0.7.1 fixes the crashes and hangs of five Switch 2 titles from the 0.7.0 known issues, adds Switch 2
+sound mixer audio and brings in a second round of fixes from Eglantine forks. Each ported fix names
+its source and author in its commit, and the README lists the forks under Credits.
 
 ### Games
 
-- **Recommended settings:** Donkey Kong Bananza, Hyrule Warriors: Age of Imprisonment and Mario
-  Tennis Fever now ask at boot, like Mario Kart World already did. Accepted settings apply to that
-  game until Orchid is closed; your saved settings are not changed.
-- **Donkey Kong Bananza:** runs with GPU accuracy low, no reactive flushing and the Boost GPU clock
-  by default, and gets a built-in 30 FPS patch option. The buffer cache skips vertex buffer and
-  page checks for ranges the CPU has not written since the last check, and repeated written ranges
-  (`EDEN_NX2_DRAW_TUNING=0` turns this off). The indirect draw reset program is found by hash.
-- **Star Fox:** boots to steady presents (window alignment, the hwacod audio codec, uniform U16
-  I2F, ULDC 8 and 16-bit widths). It still crashes soon.
-- **Hyrule Warriors:** no more device loss right after skipping a movie on drivers without
-  `nullDescriptor` (the indirect quad index buffer grows before vertex buffers are bound).
+- **Fast Fusion:** no more hang when a race loads, and the ground and sky render.
+- **Kirby Air Riders:** no abort after the intro movie and no GPU hang when a race loads.
+- **Star Fox:** cutscenes render, and the depth-stencil reinterpret crash is gone.
+- **Orbitals:** no more abort while waiting for a frame.
+- **Drag x Drive:** the controller dialog no longer loops, and a Joy-Con used as a mouse reports a
+  resting pose.
+- **Yoshi and the Mysterious Book:** surface atomics, buffer loads and 3D surface loads are lowered,
+  and programs that were rejected earlier are checked again.
+- **Ocarina of Time:** boots past its 64-bit WaitIfEqual arbitration, and its first shaders
+  (ISETP.EX with an input predicate, UIMAD.WIDE.U32) are lowered.
 
-### Graphics
+### Audio
 
-- Buffer cache, texture cache and staging buffer guards from the forks: no joins through stale page
-  table entries, no binds of deleted storage segments, clamped oversized vertex streams, zero-extent
-  render targets rejected, descriptor payloads that grow when a frame overflows them.
-- The GPU split thread recovers from a lost wake-up, and command list snapshots survive semaphore
-  waits.
-- The pipeline cache starts empty when the driver rejects the file on disk, presenting continues
-  after the surface cannot be recreated, and the stream buffer fits small BAR heaps.
-- A draw that samples its own colour target reads a copy, which fixes the tiled Donkey Kong
-  Bananza tutorial video on RADV; alias walks are skipped when no alias is newer.
-- Switch 2 video decoding converts YUV420P into NV12 directly, with full-range colour and odd
-  widths handled.
+- Switch 2 sound mixer streams play through the host.
+
+### Shaders and graphics
+
+- More instructions lowered: native BRA.U, register-handle formatted image loads and stores,
+  uniform shifts with an immediate high word, H0_NH1 half sources, IMAD.X and IMAD.WIDE.U32 forms,
+  signed I2F.F32.S64 and FSET with a uniform source. Global memory helpers no longer alias
+  descriptors, and global atomic adds go through them.
+- Vulkan: an out-of-date swapchain is recreated instead of ending the game, a bad saved device
+  index falls back to a real GPU, tessellation pipelines the driver would refuse are skipped, task
+  and mesh stages get the push constant range, and Mesa ANV keeps conditional barriers.
+- Clears are clipped to the framebuffer's layers, storage image views are cached per format, a 2D
+  blit with an undecodable render target format is skipped, and fence downloads track their ranges
+  separately.
+- Switch 2 video decoding detects H.264 packet framing per stream, sets the scaler's colour details
+  for every frame and handles the end of the stream.
 
 ### System
 
-- Data races in timing, perf stats, file logging, audio and SDL input fixed, plus undefined
-  behaviour found by UBSan.
-- Mod folders that do not exist no longer break ExeFS and LayeredFS patching, the cheat engine stops
-  before the services shut down, and the system SSL service returns the built-in certificates.
-- `EDEN_NX2_PRESENT_STATS=<n>` sets how many presents the present stats line averages.
+- Loose base dumps whose data is in an update boot, NUP files with a contentless ExeFS or RomFS
+  load, and the NUP publisher and source dump names are read.
+- `ssl:s` returns a system SSL context, the SSL connection keeps its socket, and socket receive and
+  send timeouts reach the host as the guest gives them.
+- The standard shared font carries the controller button glyphs.
+- **Help > Report a Crash on GitHub** opens a bug report, and the issue templates and the log guide
+  name Orchid.
 
 ### Known issues
 
-- See the performance and compatibility table in the README. Yoshi and the Mysterious Book renders
-  a black screen in gameplay, Orbitals does not launch, Kirby Air Riders and Fast Fusion crash on
-  loading a race, and Drag x Drive has no controller support yet.
+- See the performance and compatibility table in the README. Ocarina of Time is still early: more
+  of its shaders are being lowered for the next release.
 
 The PGO profile is the same as in 0.6.2.
