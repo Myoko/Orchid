@@ -235,6 +235,7 @@
     <addaction name="action_Report_Compatibility"/>
     <addaction name="action_Open_Mods_Page"/>
     <addaction name="action_Open_UserHandbook"/>
+    <addaction name="action_Report_Crash"/>
     <addaction name="separator"/>
     <addaction name="action_Check_For_Updates"/>
     <addaction name="action_About"/>
@@ -411,6 +412,11 @@
   <action name="action_Open_Mods_Page">
    <property name="text">
     <string>Open &amp;Mods Page</string>
+   </property>
+  </action>
+  <action name="action_Report_Crash">
+   <property name="text">
+    <string>Report a &amp;Crash on GitHub...</string>
    </property>
   </action>
   <action name="action_Open_UserHandbook">

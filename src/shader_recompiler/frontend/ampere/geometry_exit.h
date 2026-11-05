@@ -15,6 +15,7 @@ struct GeometryExitEnvelope {
     };
     std::vector<Exit> exits;
     u32 handler{};
+    bool has_returns{};
     u32 error_offset{};
     std::string_view error;
 
@@ -31,6 +32,7 @@ GeometryExitEnvelope AnalyzeGeometryExit(const Code& code) {
     const auto fail = [&](size_t index, std::string_view reason) {
         result.exits.clear();
         result.handler = 0;
+        result.has_returns = false;
         result.error_offset = static_cast<u32>(index * 16);
         result.error = reason;
         return result;
@@ -51,6 +53,14 @@ GeometryExitEnvelope AnalyzeGeometryExit(const Code& code) {
         return (words[0] & ~0xf000U) == 0x94d && words[1] == 0 && words[2] == 0x03800000 &&
                (words[3] & ModeMask) == 0 && bits(index, 12, 4) != 15;
     };
+    const auto is_return = [&](size_t index) {
+        const auto& words = code[index].words;
+        const u64 raw = words[1] | (u64{words[2] & 0x3ffff} << 32);
+        const s64 relative = static_cast<s64>(raw << 14) >> 14;
+        return (words[0] & 0x00ffffffU) == 0x00007950 && bits(index, 24, 8) < 249 &&
+               (words[2] & ~0x3ffffU) == 0x03c00000 && (words[3] & ModeMask) == 0 &&
+               static_cast<s64>(index + 1) * 16 + relative == 0;
+    };
 
     const size_t count = code.size();
     if (count < Setup + 4) return fail(count, "native exit envelope truncated");
@@ -65,7 +75,7 @@ GeometryExitEnvelope AnalyzeGeometryExit(const Code& code) {
     if (!is(handler, 0x00ff7324, 0xff, 0) || !is(handler + 1, 0x7957, 0, 0) ||
         !is(handler + 2, 0x794d, 0, 0x03800000))
         return fail(handler, "native exit handler body");
-    if (!is_exit(handler - 1) || bits(handler - 1, 12, 4) != 7)
+    if (!(is_exit(handler - 1) && bits(handler - 1, 12, 4) == 7) && !is_return(handler - 1))
         return fail(handler - 1, "native exit handler reached by fallthrough");
 
     for (size_t index = Setup; index < handler; ++index) {
@@ -75,6 +85,10 @@ GeometryExitEnvelope AnalyzeGeometryExit(const Code& code) {
         if (opcode == 0x94d) {
             if (!is_exit(index)) return fail(index, "native body EXIT mode");
             result.exits.push_back({static_cast<u32>(index * 16), bits(index, 12, 4)});
+            continue;
+        }
+        if (is_return(index)) {
+            result.has_returns = true;
             continue;
         }
         if (family < 0x140 || family >= 0x160 || opcode == 0x941 || opcode == 0x942 ||
@@ -157,6 +171,16 @@ GeometryExitEnvelope AnalyzeGeometryExit(const Code& code) {
             read_sources(true);
             write_register(bits(index, 16, 8));
             write_predicate(bits(index, 81, 3));
+        } else if (opcode == 0x321) {
+            // ALD: loads 1-4 components into Rd.. from the vertex in b, indexed by a unless RZ.
+            read_register(bits(index, 24, 8));
+            read_register(bits(index, 32, 8));
+            for (u32 i = 0; i <= bits(index, 74, 2); ++i) write_register(bits(index, 16, 8) + i);
+        } else if (opcode == 0x324 || opcode == 0x924) {
+            // OUT.EMIT/CUT: reads the output handle in a (and a register stream in b), writes the
+            // next handle to Rd.
+            read_sources(false);
+            write_register(bits(index, 16, 8));
         } else if (opcode == 0x322) {
             // AST: stores 1-4 components from operand b for the vertex in c; writes nothing.
             const u32 value = bits(index, 32, 8), components = bits(index, 74, 2) + 1;

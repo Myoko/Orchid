@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <thread>
 #include <chrono>
 #include <condition_variable>
@@ -73,6 +74,7 @@
 #include "core/hle/service/nvdrv/nvdrv_interface.h"
 #include "core/hle/service/nx2_stub_interface.h"
 #include "core/hle/service/nx2_decoder_image.h"
+#include "core/hle/service/nx2_video_ready.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
@@ -1503,6 +1505,7 @@ public:
             // Firmware commands without a known meaning: zeroed replies.
             {13, &INx2Vi2Session::StubReplyZeroed, "Unknown13"},
             {51, &INx2Vi2Session::StubReplyZeroed, "Unknown51"},
+            {53, &INx2Vi2Session::GetRecordedTimestamps, "GetRecordedTimestamps"},
             {107, &INx2Vi2Session::StubReplyZeroed, "Unknown107"},
             {108, &INx2Vi2Session::StubReplyZeroed, "Unknown108"},
             {111, &INx2Vi2Session::StubReplyZeroed, "Unknown111"},
@@ -2042,6 +2045,29 @@ private:
         TipcReplyWords(ctx, {7});
     }
 
+    // 53(u32 recorder, u64 checkpoint bits, u64 max count; B: u64 timestamps): one system tick per
+    // set checkpoint bit, ascending; reply u64 bytes written, u32 still pending. Read from the
+    // SDK's GetRecordedTimestamp, which polls this until pending is 0. nn::vi::ListFrameHistory
+    // reports a frame as shown only once it has a timestamp, and Unreal Engine games (Orbitals)
+    // wait for a shown frame before the next one: the zeroed auto stub stalled them after 8
+    // frames, and the game thread aborted after its render fence timeout.
+    // ponytail: presents complete before 229 returns, so every checkpoint gets the query time.
+    void GetRecordedTimestamps(HLERequestContext& ctx) {
+        const u32* w = ctx.CommandBuffer();
+        const u32 buffers = ((w[0] >> 20) & 0xf) + ((w[0] >> 24) & 0xf) + ((w[0] >> 28) & 0xf);
+        const u32* data = w + 2 + 3 * buffers;
+        const u64 bits = u64{data[1]} | (u64{data[2]} << 32);
+        const std::size_t count = std::min<std::size_t>(
+            {static_cast<std::size_t>(std::popcount(bits)), ctx.GetWriteBufferSize() / sizeof(u64), 8});
+        std::array<u64, 8> stamps{};
+        std::fill_n(stamps.begin(), count, system.CoreTiming().GetClockTicks());
+        if (count != 0) {
+            ctx.WriteBuffer(stamps.data(), count * sizeof(u64));
+        }
+        const u64 bytes = count * sizeof(u64);
+        TipcReplyWords(ctx, {static_cast<u32>(bytes), static_cast<u32>(bytes >> 32), 0});
+    }
+
     // 11: the notification event the SDK's render thread waits on while it tears a client down.
     // One event per session, signalled as bitmaps fill (201/202, 101/102); a fresh, never
     // signalled event per call left that thread blocked forever after 202.
@@ -2313,7 +2339,7 @@ public:
         RegisterHandlersTipc({
             {1, &INx2VideoSession::CreateDecoderService, "CreateVideoDecoderService"},
             {3, &INx2VideoSession::GetEvent, "GetEvent"},
-            {6, &INx2VideoSession::Succeed, "Start"},
+            {6, &INx2VideoSession::Start, "Start"},
             {8, &INx2VideoSession::Flush, "Flush"},
             {101, &INx2VideoSession::Configure, "Configure"},
             {109, &INx2VideoSession::SubmitInput, "SubmitInputBuffer"},
@@ -2332,6 +2358,7 @@ public:
     }
 
     ~INx2VideoSession() override {
+        m_ready->SetRunning(system.Kernel(), false);
         if (m_worker.joinable()) {
             {
                 std::scoped_lock lk{m_mutex};
@@ -2419,6 +2446,13 @@ private:
         TipcReplyWords(ctx, {});
     }
 
+    void Start(HLERequestContext& ctx) {
+        Log(ctx, "start");
+        m_ready->SetRunning(system.Kernel(), true);
+        m_ready->Signal(system.Kernel());
+        TipcReplyWords(ctx, {});
+    }
+
     void Configure(HLERequestContext& ctx) {
         const auto* w = ctx.CommandBuffer();
         std::vector<u8> configuration;
@@ -2461,16 +2495,13 @@ private:
                 "nx2:vdec ready",
                 [ready = m_ready, &kernel = system.Kernel()](
                     s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
-                    std::scoped_lock lk{ready->mutex};
-                    if (ready->event != nullptr && ready->room.load(std::memory_order_relaxed)) {
-                        ready->event->Signal(kernel);
-                    }
+                    ready->Signal(kernel);
                     return std::nullopt;
                 });
             constexpr std::chrono::nanoseconds ReadyInterval{std::chrono::milliseconds{4}};
             system.CoreTiming().ScheduleLoopingEvent(ReadyInterval, ReadyInterval, m_ready_timer);
         }
-        m_event->Signal(system.Kernel());
+        m_ready->Signal(system.Kernel());
         IPC::ResponseBuilder rb{ctx, 2, 1, 0};
         rb.Push(ResultSuccess);
         rb.PushCopyObjects(ctx, m_event->GetReadableEvent());
@@ -2578,6 +2609,9 @@ private:
     // handed out keep their place, so the sync values stay in step with the client's ring.
     void Flush(HLERequestContext& ctx) {
         Log(ctx, ctx.GetCommand() == 8 ? "flush" : "stop");
+        if (ctx.GetCommand() == 207) {
+            m_ready->SetRunning(system.Kernel(), false);
+        }
         {
             std::scoped_lock lk{m_mutex};
             m_inputs.clear();
@@ -2598,6 +2632,7 @@ private:
 
     void Finalize(HLERequestContext& ctx) {
         Log(ctx, "finalize");
+        m_ready->SetRunning(system.Kernel(), false);
         {
             std::scoped_lock lk{m_mutex};
             CompleteHandedFences();
@@ -2871,16 +2906,10 @@ private:
         }
     }
 
-    struct ReadyState {
-        std::mutex mutex;
-        Kernel::KEvent* event{};
-        std::atomic<bool> room{true}; ///< The input queue takes more frames
-    };
-
     KernelHelpers::ServiceContext m_context;
     std::shared_ptr<Nx2NativeObjects> m_objects;
     Kernel::KEvent* m_event{};
-    std::shared_ptr<ReadyState> m_ready = std::make_shared<ReadyState>();
+    std::shared_ptr<Nx2VideoReadyState> m_ready = std::make_shared<Nx2VideoReadyState>();
     std::shared_ptr<Core::Timing::EventType> m_ready_timer;
     u64 m_submitted{};
     u32 m_syncpoint{NoSyncpoint}; ///< Counts finished frames (allocated at the first register)

@@ -457,12 +457,13 @@ void BSD_USA::Read(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const s32 fd = rp.Pop<s32>();
 
-    LOG_WARNING(Service, "(STUBBED) called. fd={} len={}", fd, ctx.GetWriteBufferSize());
+    LOG_DEBUG(Service, "called. fd={} len={}", fd, ctx.GetWriteBufferSize());
 
-    IPC::ResponseBuilder rb{ctx, 4};
-    rb.Push(ResultSuccess);
-    rb.Push<u32>(0); // ret
-    rb.Push<u32>(0); // bsd errno
+    ExecuteWork(ctx, RecvWork{
+                         .fd = fd,
+                         .flags = 0,
+                         .message = std::vector<u8>(ctx.GetWriteBufferSize()),
+                     });
 }
 
 void BSD_USA::Close(HLERequestContext& ctx) {
@@ -521,9 +522,47 @@ void BSD_USA::EventFd(HLERequestContext& ctx) {
     const u64 initval = rp.Pop<u64>();
     const u32 flags = rp.Pop<u32>();
 
-    LOG_WARNING(Service, "(STUBBED) called. initval={}, flags={}", initval, flags);
+    LOG_DEBUG(Service, "called. initval={}, flags={}", initval, flags);
 
-    BuildErrnoResponse(ctx, Errno::SUCCESS);
+    // ponytail: the eventfd is a non-blocking UDP loopback socket connected to itself, so Poll,
+    // Write and Read take the normal socket paths. Each Read takes one written value instead of
+    // their sum, and initval is ignored (Orbitals sends 4 and 0, likely the EFD_NONBLOCK flag
+    // and a zero count in swapped order).
+    auto socket = std::make_shared<Network::Socket>();
+    Errno bsd_errno = Translate(
+        socket->Initialize(Network::Domain::INET, Network::Type::DGRAM, Network::Protocol::UDP));
+    if (bsd_errno == Errno::SUCCESS) {
+        bsd_errno = Translate(socket->Bind({Network::Domain::INET, {127, 0, 0, 1}, 0}));
+    }
+    if (bsd_errno == Errno::SUCCESS) {
+        const auto [address, errno_name] = socket->GetSockName();
+        bsd_errno = Translate(errno_name);
+        if (bsd_errno == Errno::SUCCESS) bsd_errno = Translate(socket->Connect(address));
+    }
+    if (bsd_errno == Errno::SUCCESS) bsd_errno = Translate(socket->SetNonBlock(true));
+
+    s32 fd = -1;
+    if (bsd_errno == Errno::SUCCESS) {
+        std::scoped_lock lock{file_descriptors_mutex};
+        fd = FindFreeFileDescriptorHandle();
+        if (fd < 0) {
+            bsd_errno = Errno::MFILE;
+        } else {
+            file_descriptors[fd] = FileDescriptor{
+                .socket = std::move(socket),
+                .flags = static_cast<s32>(Network::FLAG_O_NONBLOCK),
+            };
+        }
+    }
+    if (bsd_errno != Errno::SUCCESS) {
+        LOG_ERROR(Service, "EventFd failed with errno {}", static_cast<u32>(bsd_errno));
+        fd = -1;
+    }
+
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(ResultSuccess);
+    rb.Push<s32>(fd);
+    rb.PushEnum(bsd_errno);
 }
 
 template <typename Work>

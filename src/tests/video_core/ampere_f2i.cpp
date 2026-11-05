@@ -394,7 +394,7 @@ TEST_CASE("Ampere formatted buffer stores retain strict mode and operand bounds"
         invalid[0].words[1] = 0x00c00004U | (dimension << 29);
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
     }
-    for (const u32 bit : {59U, 60U, 72U, 80U, 84U, 91U}) {
+    for (const u32 bit : {59U, 60U, 80U, 84U, 91U}) { // partial channel masks (72-75) are valid
         auto invalid = code;
         invalid[0].words[bit / 32] ^= 1U << (bit % 32);
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));

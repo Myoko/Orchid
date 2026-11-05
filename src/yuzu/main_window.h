@@ -345,6 +345,7 @@ private slots:
     void OnMenuReportCompatibility();
     void OnOpenModsPage();
     void OnOpenUserHandbook();
+    void OnReportCrash();
 
     /// Called whenever a user selects a game in the game list widget.
     void OnGameListLoadFile(QString game_path, u64 program_id);
@@ -547,6 +548,8 @@ private:
 
     // Whether emulation is currently running in yuzu.
     bool emulation_running = false;
+    // The crash log is this run's once a game has booted, else the previous run's.
+    bool game_booted = false;
     bool boot_in_progress = false;
     bool close_pending = false;
     // The path to the game currently running

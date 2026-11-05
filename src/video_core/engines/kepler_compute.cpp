@@ -399,7 +399,9 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                         LOG_INFO(HW_GPU, "Semaphore watch: QMD release {:#x} = {:#x} flags {:#x}", address, payload, flags);
                     }
                     rasterizer->Query(address, VideoCommon::QueryType::Payload,
-                        VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
+                        (flags >> 30) == 1 ? VideoCommon::QueryPropertiesFlags::IsAFence
+                                           : VideoCommon::QueryPropertiesFlags::HasTimeout,
+                        payload, 0);
                 }
                 return true;
             }, [&](const auto& descriptor) { return DispatchNativeCompute(descriptor); });
@@ -640,7 +642,10 @@ void KeplerCompute::RememberDlssMotionVectors() {
 // 360x202), so its slots must win over the scan. Blit one to the other with bilinear filtering
 // when both are plain 2D images of the same format and the output is larger: title 4's slots
 // first, then Fortune's Weave's, then Donkey Kong Bananza's, else the first two handles in
-// cbuf0+0x80..0x11c that form such a pair.
+// cbuf0+0x80..0x11c that form such a pair. Failing all that, the named slots may also pair images
+// of different formats and an equal width, converting in the blit: Star Fox's network reads an
+// RGBA16F 1600x900 frame at +0x90 and writes RGBA8 1920x1080 at +0xa0, and its cutscene pass reads
+// RGBA8 sRGB at +0x328 and writes RGBA16F at +0x348, both 1920x1080 (zortos293 0f9b1c31e).
 bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     const auto& cbuf = launch_description.const_buffer_config[0];
     const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
@@ -654,6 +659,12 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         return from && to && from->format == to->format && from->Address() != 0 &&
                to->Address() != 0 && to->Width() > from->Width() && from->IsBlockLinear() &&
                to->IsBlockLinear();
+    };
+    const auto converting_pair = [](const std::optional<Texture::TICEntry>& from,
+                                    const std::optional<Texture::TICEntry>& to) {
+        return from && to && from->Address() != 0 && to->Address() != 0 &&
+               from->Address() != to->Address() && to->Width() >= from->Width() &&
+               to->Height() >= from->Height() && from->IsBlockLinear() && to->IsBlockLinear();
     };
     std::optional<Texture::TICEntry> input = image(0x90), output = image(0xa0);
     bool fortunes_weave = false;
@@ -683,17 +694,34 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
             }
         }
     }
+    bool converting = false;
+    for (const auto& [from, to] : {std::pair{0x90U, 0xa0U}, {0x328U, 0x348U}, {0x60U, 0x70U}}) {
+        if (input) break;
+        if (converting_pair(image(from), image(to))) {
+            input = image(from);
+            output = image(to);
+            converting = true;
+        }
+    }
     if (!input || !output)
         return false;
     using RTFormat = Tegra::RenderTargetFormat;
-    RTFormat format{};
-    switch (input->format) {
-    case Texture::TextureFormat::A2B10G10R10: format = RTFormat::A2B10G10R10_UNORM; break;
-    case Texture::TextureFormat::A8B8G8R8: format = RTFormat::A8B8G8R8_UNORM; break;
-    case Texture::TextureFormat::B10G11R11: format = RTFormat::B10G11R11_FLOAT; break;
-    case Texture::TextureFormat::R16G16B16A16: format = RTFormat::R16G16B16A16_FLOAT; break;
-    default: return false;
-    }
+    // A converting blit keeps sRGB views so it encodes or decodes; a same-format copy stays raw.
+    const auto render_format = [converting](const Texture::TICEntry& tic) -> std::optional<RTFormat> {
+        switch (tic.format) {
+        case Texture::TextureFormat::A2B10G10R10: return RTFormat::A2B10G10R10_UNORM;
+        case Texture::TextureFormat::A8B8G8R8:
+            return converting && tic.srgb_conversion ? RTFormat::A8B8G8R8_SRGB
+                                                     : RTFormat::A8B8G8R8_UNORM;
+        case Texture::TextureFormat::B10G11R11: return RTFormat::B10G11R11_FLOAT;
+        case Texture::TextureFormat::R16G16B16A16: return RTFormat::R16G16B16A16_FLOAT;
+        default: return std::nullopt;
+        }
+    };
+    const auto input_format = render_format(*input), output_format = render_format(*output);
+    if (!input_format || !output_format)
+        return false;
+    const RTFormat format = *input_format;
     const auto surface = [&](const Texture::TICEntry& tic) {
         Fermi2D::Surface result{};
         result.format = format;
@@ -822,8 +850,10 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
                                                      dlss_depth ? &*dlss_depth : nullptr,
                                                      dlss_jitter, {1.0f, 1.0f});
     };
+    auto destination = surface(*output);
+    destination.format = *output_format;
     const bool done = upscale_temporally() ||
-                      rasterizer->AccelerateSurfaceCopy(source, surface(*output), config);
+                      rasterizer->AccelerateSurfaceCopy(source, destination, config);
     if (static u32 checked{}; checked++ == sample_at) {
         const u64 size = u64{output->Width()} * output->Height() * 4;
         if (const auto device = memory_manager.GpuToCpuAddress(output->Address())) {
@@ -854,6 +884,9 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
                  output->Width(), output->Height(), output->block_width.Value(),
                  output->block_height.Value(), output->block_depth.Value(), output->max_mip_level.Value(),
                  done ? "blitted" : "not accelerated");
+        if (converting)
+            LOG_INFO(HW_GPU, "Upscale fallback converts format {:#x} -> {:#x}",
+                     static_cast<u32>(*input_format), static_cast<u32>(*output_format));
     }
     return done;
 }

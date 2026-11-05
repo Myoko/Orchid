@@ -3,7 +3,7 @@ description: File a bug report
 body:
   - type: markdown
     attributes:
-      value: Tech support does not belong here. You should only file an issue here if you think you have experienced an actual bug with Eden.
+      value: Tech support does not belong here. You should only file an issue here if you think you have experienced an actual bug with Orchid.
   - type: checkboxes
     attributes:
       label: Is there an existing issue for this?
@@ -12,6 +12,7 @@ body:
       - label: I have searched the existing issues
         required: true
   - type: input
+    id: build
     attributes:
       label: Affected Build(s)
       description: List the affected build(s) that this issue applies to.
@@ -43,7 +44,7 @@ body:
     id: log
     attributes:
       label: Log File
-      description: A log file will help our developers to better diagnose and fix the issue. Instructions can be found [here](https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md).
+      description: A log file will help our developers to better diagnose and fix the issue. Instructions can be found [here](https://github.com/MythosOfs/Orchid/blob/main/docs/user/HowToAccessLogs.md).
     validations:
       required: true
   - type: textarea

@@ -111,7 +111,8 @@ public:
         last_writer_position = write_position;
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
-    void WaitForWriters();
+    /// Returns whether any of it was still queued.
+    bool WaitForWriters();
 
     /// Semaphore releases the front sent that the back has not executed yet (front thread only).
     /// An acquire one of them meets needs no drain: the back runs the release, then the work after

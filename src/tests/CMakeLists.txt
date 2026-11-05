@@ -56,6 +56,7 @@ add_executable(tests
     video_core/nx2_command_ranges.cpp
     video_core/physical_alias.cpp
     video_core/vertex_repack.cpp
+    video_core/ampere_lowering.cpp
     video_core/ampere_returns.cpp
     video_core/ampere_f2i.cpp
     video_core/compute_storage_buffers.cpp
@@ -72,6 +73,7 @@ add_executable(tests
     video_core/x8d24_conversion.cpp
     video_core/ampere_bindless_tex.cpp
     video_core/ampere_sured.cpp
+    video_core/ampere_yoshi_surface.cpp
     video_core/ampere_release_guards.cpp
     video_core/ampere_release_f2i.cpp
     video_core/syncpoint_manager.cpp

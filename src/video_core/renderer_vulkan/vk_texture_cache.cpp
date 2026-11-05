@@ -1434,18 +1434,33 @@ void TextureCacheRuntime::ReinterpretImage(Image& dst, Image& src,
     boost::container::small_vector<VkBufferImageCopy, 16> vk_out_copies(copies.size());
     const VkImageAspectFlags src_aspect_mask = src.AspectMask();
     const VkImageAspectFlags dst_aspect_mask = dst.AspectMask();
+    // A buffer copy moves exactly one aspect (radv divides by zero on depth and stencil together),
+    // so a depth-stencil image goes through its depth plane, 4 bytes per texel for D24S8 and D32S8.
+    // ponytail: the stencil plane keeps its old contents, copy it separately if a game needs it.
+    constexpr VkImageAspectFlags depth_stencil =
+        VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    const auto plane_aspect = [](VkImageAspectFlags mask) {
+        return mask == depth_stencil ? VkImageAspectFlags{VK_IMAGE_ASPECT_DEPTH_BIT} : mask;
+    };
+    const auto plane_bpp = [](const Image& image) {
+        return image.AspectMask() == depth_stencil
+                   ? 4U
+                   : BytesPerBlock(image.info.format) / DefaultBlockWidth(image.info.format);
+    };
+    const VkImageAspectFlags src_copy_aspect = plane_aspect(src_aspect_mask);
+    const VkImageAspectFlags dst_copy_aspect = plane_aspect(dst_aspect_mask);
 
-    const auto bpp_in = BytesPerBlock(src.info.format) / DefaultBlockWidth(src.info.format);
-    const auto bpp_out = BytesPerBlock(dst.info.format) / DefaultBlockWidth(dst.info.format);
+    const auto bpp_in = plane_bpp(src);
+    const auto bpp_out = plane_bpp(dst);
     std::ranges::transform(copies, vk_in_copies.begin(),
-                           [src_aspect_mask, bpp_in, bpp_out](const auto& copy) {
+                           [src_copy_aspect, bpp_in, bpp_out](const auto& copy) {
                                auto copy2 = copy;
                                copy2.src_offset.x = (bpp_out * copy.src_offset.x) / bpp_in;
                                copy2.extent.width = (bpp_out * copy.extent.width) / bpp_in;
-                               return MakeBufferImageCopy(copy2, true, src_aspect_mask);
+                               return MakeBufferImageCopy(copy2, true, src_copy_aspect);
                            });
-    std::ranges::transform(copies, vk_out_copies.begin(), [dst_aspect_mask](const auto& copy) {
-        return MakeBufferImageCopy(copy, false, dst_aspect_mask);
+    std::ranges::transform(copies, vk_out_copies.begin(), [dst_copy_aspect](const auto& copy) {
+        return MakeBufferImageCopy(copy, false, dst_copy_aspect);
     });
     const u32 img_bpp = BytesPerBlock(dst.info.format);
     size_t total_size = 0;

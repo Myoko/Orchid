@@ -9,6 +9,7 @@
 #endif
 
 #include <boost/algorithm/string/split.hpp>
+#include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
@@ -1514,6 +1515,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Stop, &MainWindow::OnStopGame);
     connect_menu(ui->action_Open_Mods_Page, &MainWindow::OnOpenModsPage);
     connect_menu(ui->action_Open_UserHandbook, &MainWindow::OnOpenUserHandbook);
+    connect_menu(ui->action_Report_Crash, &MainWindow::OnReportCrash);
     connect_menu(ui->action_Restart, &MainWindow::OnRestartGame);
     connect_menu(ui->action_Configure, &MainWindow::OnConfigure);
     connect_menu(ui->action_Configure_Current_Game, &MainWindow::OnConfigurePerGame);
@@ -1913,6 +1915,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         return;
     }
     boot_in_progress = true;
+    game_booted = true;
     game_list->SetScanEnabled(false);
     QElapsedTimer boot_timer;
     boot_timer.start();
@@ -3346,6 +3349,56 @@ void MainWindow::OnOpenModsPage() {
 
 void MainWindow::OnOpenUserHandbook() {
     OpenURL(QUrl(QStringLiteral("https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/README.md")));
+}
+
+void MainWindow::OnReportCrash() {
+    const auto log_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir);
+    auto log_path = log_dir / LOG_FILE;
+    if (!game_booted) {
+        // The run that crashed was renamed to .old.txt when this one started.
+        log_path += ".old.txt";
+    }
+    QFile file(QString::fromStdString(Common::FS::PathToUTF8String(log_path)));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Report a Crash"),
+                             tr("No log of a previous run was found. Start the game again until "
+                                "it crashes, then use this menu entry after restarting Orchid."));
+        return;
+    }
+    const QStringList lines = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'));
+
+    // The log's first lines are the version and the host, its Report lines the GPU and driver;
+    // its last lines lead up to the crash.
+    const QString system =
+        (lines.mid(0, 8) + lines.filter(QStringLiteral(":Report: "))).join(QLatin1Char('\n'));
+    qsizetype tail_count = 80;
+    QUrl url;
+    do {
+        const QString log =
+            QStringLiteral("Attach the full `%1` from the folder that just opened.\n\n"
+                           "```\n%2\n```")
+                .arg(QString::fromStdString(Common::FS::PathToUTF8String(log_path.filename())),
+                     lines.mid(std::max<qsizetype>(0, lines.size() - tail_count))
+                         .join(QLatin1Char('\n')));
+        // Field ids are the ones in .github/ISSUE_TEMPLATE/bug_report.yml.
+        QByteArray query = "template=bug_report.yml&title=Crash%3A%20";
+        const auto add = [&query](const char* field, const QString& value) {
+            query += QByteArray("&") + field + "=" + QUrl::toPercentEncoding(value);
+        };
+        add("build", QStringLiteral("%1 (%2)").arg(QString::fromUtf8(Common::g_build_version),
+                                                   QString::fromUtf8(Common::g_scm_rev)));
+        add("system-config", system);
+        add("log", log);
+        const QByteArray encoded = "https://github.com/" +
+                                   QByteArray(Common::g_build_auto_update_repo) +
+                                   "/issues/new?" + query;
+        url = QUrl::fromEncoded(encoded);
+        tail_count -= 10;
+        // GitHub rejects issue URLs longer than about 8 KB.
+    } while (url.toEncoded().size() > 8000 && tail_count > 0);
+
+    QtCommon::Game::OpenLogFolder();
+    OpenURL(url);
 }
 
 void MainWindow::ToggleFullscreen() {
