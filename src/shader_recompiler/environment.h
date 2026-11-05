@@ -77,6 +77,9 @@ public:
 
     [[nodiscard]] virtual u32 TranslateProgramAddress(u32 address) const { return address; }
 
+    /// True for programs lowered from native (Switch 2) code.
+    [[nodiscard]] virtual bool HasNativeInstructions() const { return false; }
+
     [[nodiscard]] virtual u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) = 0;
 
     [[nodiscard]] virtual TextureType ReadTextureType(u32 raw_handle) = 0;

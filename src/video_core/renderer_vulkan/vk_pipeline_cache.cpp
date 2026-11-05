@@ -1857,7 +1857,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
     LOG_WARNING(Render_Vulkan, "Skipping cached tensor shader: {}", exception.what());
     return nullptr;
 } catch (const Shader::Exception& exception) {
-    LOG_ERROR(Render_Vulkan, "{}", exception.what());
+    LOG_ERROR(Render_Vulkan, "compute {:016x}: {}", key.unique_hash, exception.what());
     return nullptr;
 }
 

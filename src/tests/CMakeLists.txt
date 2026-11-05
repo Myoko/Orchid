@@ -59,13 +59,16 @@ add_executable(tests
     video_core/h264_packet.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/vertex_repack.cpp
+    video_core/shader_reuse_environment.cpp
     video_core/ampere_lowering.cpp
+    video_core/ampere_matrix.cpp
     video_core/ampere_returns.cpp
     video_core/ampere_f2i.cpp
     video_core/ampere_i2f64.cpp
     video_core/ampere_uniform_fset.cpp
     video_core/compute_storage_buffers.cpp
     video_core/cooperative_matrix.cpp
+    video_core/texture_depth_float.cpp
     video_core/ampere_kirby.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_geometry_lowering.cpp

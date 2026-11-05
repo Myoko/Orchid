@@ -91,6 +91,10 @@ RecordingEnvironment::RecordingEnvironment(Shader::Environment& inner_) : inner{
     // Shader::Environment's own accessors read these members.
     sph = inner->SPH();
     gp_passthrough_mask = inner->GpPassthroughMask();
+    // Task and mesh translation reads these; without them a mesh program saw topology 0.
+    // They are not recorded: the pipeline's unique hashes already carry them (MeshStateHash).
+    mesh_registers = inner->MeshRegisters();
+    mesh_primitive_header = inner->MeshPrimitiveHeader();
     stage = inner->ShaderStage();
     start_address = inner->StartAddress();
     is_proprietary_driver = inner->IsProprietaryDriver();
@@ -105,6 +109,10 @@ u64 RecordingEnvironment::ReadInstruction(u32 address) {
 
 u32 RecordingEnvironment::TranslateProgramAddress(u32 address) const {
     return inner->TranslateProgramAddress(address);
+}
+
+bool RecordingEnvironment::HasNativeInstructions() const {
+    return inner->HasNativeInstructions();
 }
 
 u32 RecordingEnvironment::ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) {
@@ -146,6 +154,12 @@ bool RecordingEnvironment::HasHLEMacroState() const {
 // Fixed properties, compared as a whole by TranslationReads::Matches.
 u32 RecordingEnvironment::TextureBoundBuffer() const {
     return inner->TextureBoundBuffer();
+}
+
+// Native programs carry their own surface bank (lowered code, so the unique hash covers it);
+// the base class default would answer the texture bank instead.
+u32 RecordingEnvironment::SurfaceBoundBuffer() const {
+    return inner->SurfaceBoundBuffer();
 }
 
 u32 RecordingEnvironment::LocalMemorySize() const {

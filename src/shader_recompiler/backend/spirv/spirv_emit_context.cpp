@@ -1132,26 +1132,41 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     std::tie(load_global_func_u32x4, write_global_func_u32x4) =
         define(&StorageDefinitions::U32x4, storage_types.U32x4, U32[4], sizeof(u32[4]));
 
-    const bool uses_atomic_iadd = std::ranges::any_of(program.blocks, [](const IR::Block* block) {
-        return std::ranges::any_of(block->Instructions(), [](const IR::Inst& inst) {
-            return inst.GetOpcode() == IR::Opcode::GlobalAtomicIAdd32;
+    using AtomicOp = Id (Sirit::Module::*)(Id, Id, Id, Id, Id);
+    static constexpr std::array<std::pair<IR::Opcode, AtomicOp>, 9> operations{{
+        {IR::Opcode::GlobalAtomicIAdd32, &Sirit::Module::OpAtomicIAdd},
+        {IR::Opcode::GlobalAtomicSMin32, &Sirit::Module::OpAtomicSMin},
+        {IR::Opcode::GlobalAtomicUMin32, &Sirit::Module::OpAtomicUMin},
+        {IR::Opcode::GlobalAtomicSMax32, &Sirit::Module::OpAtomicSMax},
+        {IR::Opcode::GlobalAtomicUMax32, &Sirit::Module::OpAtomicUMax},
+        {IR::Opcode::GlobalAtomicAnd32, &Sirit::Module::OpAtomicAnd},
+        {IR::Opcode::GlobalAtomicOr32, &Sirit::Module::OpAtomicOr},
+        {IR::Opcode::GlobalAtomicXor32, &Sirit::Module::OpAtomicXor},
+        {IR::Opcode::GlobalAtomicExchange32, &Sirit::Module::OpAtomicExchange},
+    }};
+    for (size_t index = 0; index < operations.size(); ++index) {
+        const auto [opcode, operation] = operations[index];
+        const bool used = std::ranges::any_of(program.blocks, [opcode](const IR::Block* block) {
+            return std::ranges::any_of(block->Instructions(), [opcode](const IR::Inst& inst) {
+                return inst.GetOpcode() == opcode;
+            });
         });
-    });
-    if (!uses_atomic_iadd) {
-        return;
+        if (!used) {
+            continue;
+        }
+        const Id function_type{TypeFunction(U32[1], U64, U32[1])};
+        atomic_global_func_u32[index] =
+            OpFunction(U32[1], spv::FunctionControlMask::MaskNone, function_type);
+        const Id address{OpFunctionParameter(U64)};
+        const Id value{OpFunctionParameter(U32[1])};
+        define_body(&StorageDefinitions::U32, address, storage_types.U32.element, 2,
+                    [&](Id pointer) {
+                        const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
+                        OpReturnValue((this->*operation)(U32[1], pointer, scope, zero, value));
+                    });
+        OpReturnValue(zero);
+        OpFunctionEnd();
     }
-    const Id function_type{TypeFunction(U32[1], U64, U32[1])};
-    atomic_iadd_global_func_u32 =
-        OpFunction(U32[1], spv::FunctionControlMask::MaskNone, function_type);
-    const Id address{OpFunctionParameter(U64)};
-    const Id value{OpFunctionParameter(U32[1])};
-    define_body(&StorageDefinitions::U32, address, storage_types.U32.element, 2,
-                [&](Id pointer) {
-                    const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
-                    OpReturnValue(OpAtomicIAdd(U32[1], pointer, scope, zero, value));
-                });
-    OpReturnValue(zero);
-    OpFunctionEnd();
 }
 
 void EmitContext::DefineRescalingInput(const Info& info) {

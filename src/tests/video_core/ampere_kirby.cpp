@@ -29,7 +29,7 @@ TEST_CASE("Ampere reciprocal accepts the captured uniform source form", "[video_
     const auto predicated = LowerToMaxwell(code);
     REQUIRE(static_cast<bool>(predicated));
     REQUIRE(((predicated.instructions.front() >> 16) & 15) == 1);
-    for (const u32 source : {64U, 0x80000008U}) { // UR28-UR62 map to R180-R214
+    for (const u32 source : {64U, 0x00000108U}) { // UR64 does not exist; bit 40 is unknown
         auto invalid = code;
         invalid[0].words[1] = source;
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
@@ -39,9 +39,21 @@ TEST_CASE("Ampere reciprocal accepts the captured uniform source form", "[video_
         invalid[0].words[2] = mode;
         REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
     }
+    // A guest R220 (UR4's mirror) destination is shadowed: written to a borrowed register and
+    // copied to IR bank 1, never to the mirror.
     auto alias = code;
     alias[0].words[0] = 0x00dc1d08;
-    REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(alias)));
+    const auto shadowed = LowerToMaxwell(alias);
+    REQUIRE(static_cast<bool>(shadowed));
+    REQUIRE(std::find(shadowed.instructions.begin(), shadowed.instructions.end(),
+                      Shader::Ampere::NativeRegisterCopy(1, 220, 0, 176)) !=
+            shadowed.instructions.end());
+    REQUIRE(std::none_of(shadowed.instructions.begin(), shadowed.instructions.end(),
+                         [](u64 word) {
+                             const bool copy = (word >> 48) == 0x5c98 && ((word >> 39) & 15) == 0 &&
+                                               ((word >> 44) & 15) == 10;
+                             return !copy && (word & 0xff) == 220;
+                         }));
 }
 
 TEST_CASE("Ampere clip-state updates lower to nothing, other forms stay unsupported", "[video_core][ampere]") {
@@ -220,7 +232,7 @@ TEST_CASE("Ampere warp reductions retain their operation and active-lane mask",
 
 TEST_CASE("Ampere warp reductions reject unsupported modes and uniform destinations",
           "[video_core][ampere]") {
-    for (const u32 mode : {0U, 0x8000U, 0x14200U}) {
+    for (const u32 mode : {0U, 0x8000U, 0x4200U}) {
         const std::array<Instruction, 2> code{{
             {{0x030673c4, 0, mode, 0x000ea200}},
             {{0x0000794d, 0, 0x03800000, 0}},

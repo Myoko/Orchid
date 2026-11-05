@@ -161,12 +161,14 @@ public:
 
     u64 ReadInstruction(u32 address) override;
     u32 TranslateProgramAddress(u32 address) const override;
+    bool HasNativeInstructions() const override;
     u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) override;
     Shader::TextureType ReadTextureType(u32 raw_handle) override;
     Shader::TexturePixelFormat ReadTexturePixelFormat(u32 raw_handle) override;
     bool IsTexturePixelFormatInteger(u32 raw_handle) override;
     u32 ReadViewportTransformState() override;
     u32 TextureBoundBuffer() const override;
+    u32 SurfaceBoundBuffer() const override;
     u32 LocalMemorySize() const override;
     u32 SharedMemorySize() const override;
     std::array<u32, 3> WorkgroupSize() const override;
