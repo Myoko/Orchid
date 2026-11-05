@@ -1,58 +1,31 @@
 > [!IMPORTANT]
-> ## New: report crashes from inside Orchid
-> If a game crashes, start Orchid again and pick **Help > Report a Crash on GitHub**. It opens a bug report with your build, system, GPU and driver and the end of the crash log already filled in, and opens the log folder so you can attach the full log of the crashed run. Please try it and use it for every crash: reports with a log get fixed much faster.
+> ## Report crashes from inside Orchid
+> If a game crashes, start Orchid again and pick **Help > Report a Crash on GitHub**. It opens a bug report with your build, system, GPU and driver and the end of the crash log already filled in, and opens the log folder so you can attach the full log of the crashed run. Please use it for every crash: reports with a log get fixed much faster, and reports without one are closed.
 
-## What's new in 0.7.1
+## What's new in 0.7.3
 
-0.7.1 fixes the crashes and hangs of five Switch 2 titles from the 0.7.0 known issues, adds Switch 2
-sound mixer audio and brings in a second round of fixes from Eglantine forks. Each ported fix names
-its source and author in its commit, and the README lists the forks under Credits.
+0.7.3 is a small fix release for Ocarina of Time: its lighting is no longer overexposed. Nothing
+else is new. Two of the fixes sit in shared code (shader translation and uniform uploads), so the
+shader cache of every game is rebuilt once on first boot. The fixes are ported from
+zortos293/Eglantine and name their authors in their commits.
 
-### Games
+### Ocarina of Time
 
-- **Fast Fusion:** no more hang when a race loads, and the ground and sky render.
-- **Kirby Air Riders:** no abort after the intro movie and no GPU hang when a race loads.
-- **Star Fox:** cutscenes render, and the depth-stencil reinterpret crash is gone.
-- **Orbitals:** no more abort while waiting for a frame.
-- **Drag x Drive:** the controller dialog no longer loops, and a Joy-Con used as a mouse reports a
-  resting pose.
-- **Yoshi and the Mysterious Book:** surface atomics, buffer loads and 3D surface loads are lowered,
-  and programs that were rejected earlier are checked again.
-- **Ocarina of Time:** boots past its 64-bit WaitIfEqual arbitration, and its first shaders
-  (ISETP.EX with an input predicate, UIMAD.WIDE.U32) are lowered.
-
-### Audio
-
-- Switch 2 sound mixer streams play through the host.
-
-### Shaders and graphics
-
-- More instructions lowered: native BRA.U, register-handle formatted image loads and stores,
-  uniform shifts with an immediate high word, H0_NH1 half sources, IMAD.X and IMAD.WIDE.U32 forms,
-  signed I2F.F32.S64 and FSET with a uniform source. Global memory helpers no longer alias
-  descriptors, and global atomic adds go through them.
-- Vulkan: an out-of-date swapchain is recreated instead of ending the game, a bad saved device
-  index falls back to a real GPU, tessellation pipelines the driver would refuse are skipped, task
-  and mesh stages get the push constant range, and Mesa ANV keeps conditional barriers.
-- Clears are clipped to the framebuffer's layers, storage image views are cached per format, a 2D
-  blit with an undecodable render target format is skipped, and fence downloads track their ranges
-  separately.
-- Switch 2 video decoding detects H.264 packet framing per stream, sets the scaler's colour details
-  for every frame and handles the end of the stream.
-
-### System
-
-- Loose base dumps whose data is in an update boot, NUP files with a contentless ExeFS or RomFS
-  load, and the NUP publisher and source dump names are read.
-- `ssl:s` returns a system SSL context, the SSL connection keeps its socket, and socket receive and
-  send timeouts reach the host as the guest gives them.
-- The standard shared font carries the controller button glyphs.
-- **Help > Report a Crash on GitHub** opens a bug report, and the issue templates and the log guide
-  name Orchid.
+- **Exposure and haze:** outdoor scenes are no longer washed out. Orchid scales the game's exposure
+  constant before its filmic curve and thins the outdoor fog. This is a visual workaround while
+  the root cause is still open; set `EDEN_NX2_OOT_VISUAL_WORKAROUND=0` to turn it off.
+- **Sky ambient light:** the compute pass that gathers the sky's ambient light now gets its buffer,
+  so rocks and shadows in Kokiri Forest are lit by the sky instead of looking yellow (Duck912).
+- The 64 KiB uniform bank of native programs is uploaded again once per frame, so constants the
+  memory tracker misses no longer go stale (kraibse, from Franseven's port).
 
 ### Known issues
 
-- See the performance and compatibility table in the README. Ocarina of Time is still early: more
-  of its shaders are being lowered for the next release.
+- **Ocarina of Time:** grass, bushes and some trees can still be missing, and the fog workaround
+  also thins the fog in interiors. Missing vegetation is the next fix.
+- **Mario Tennis Fever on NVIDIA:** the GPU can be lost when a match starts (Windows, RTX 30
+  series). We are still looking for the cause; until then, try switching the console mode to
+  **Docked** and tell us in issue #14 whether that helps.
+- See the performance and compatibility table in the README.
 
 The PGO profile is the same as in 0.6.2.

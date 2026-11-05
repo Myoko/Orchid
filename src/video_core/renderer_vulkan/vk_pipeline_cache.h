@@ -229,6 +229,8 @@ private:
     bool use_async_translation{};
     bool use_shader_reuse{};
     size_t num_translation_threads{};
+    bool oot_visual_workaround{};
+    u64 visual_workaround_title{};
 
     GraphicsPipelineCacheKey graphics_key{};
     GraphicsPipeline* current_pipeline{};

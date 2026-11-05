@@ -40,6 +40,7 @@ add_executable(tests
     core/vfs_vector.cpp
     core/internal_network/network.cpp
     video_core/aftermath_dump.cpp
+    video_core/oot_visual_workaround.cpp
     video_core/memory_tracker.cpp
     video_core/memory_budget.cpp
     video_core/astc_recompression_override.cpp
@@ -69,6 +70,7 @@ add_executable(tests
     video_core/compute_storage_buffers.cpp
     video_core/cooperative_matrix.cpp
     video_core/texture_depth_float.cpp
+    video_core/texture_r2ur_handle.cpp
     video_core/ampere_kirby.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_geometry_lowering.cpp

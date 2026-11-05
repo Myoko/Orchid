@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <span>
+#include <utility>
 #include <catch2/catch_test_macros.hpp>
 
 #include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
@@ -799,6 +800,26 @@ TEST_CASE("Ampere F2I lowers truncated 16-bit destinations", "[video_core][amper
     REQUIRE(signed_lowered.instructions.front() == 0x5cb0018000471905ULL);
     signed_code[0].words[3] = 1; // unknown bits stay rejected
     REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(signed_code)));
+}
+
+TEST_CASE("Ampere F2IP to a byte lowers as the byte F2I of its B source", "[video_core][ampere]") {
+    // F2IP.U8.F32.NTZ R9, RZ, R9, RZ (Ocarina of Time): without it the scene's vertex shaders were
+    // rejected, their colour draws skipped and the sky showed through the ground.
+    const Instruction exit{{0x0000794d, 0, 0x03800000, 0}};
+    const std::array<Instruction, 2> packed{{{{0xff097243U, 9, 0x0000c4ffU, 0x000fe400U}}, exit}};
+    const std::array<Instruction, 2> byte{{{{0x00097305U, 9, 0x0020e000U, 0x000fe400U}}, exit}};
+    const auto lowered = LowerToMaxwell(packed);
+    REQUIRE(static_cast<bool>(lowered));
+    const auto expected = LowerToMaxwell(byte);
+    REQUIRE(static_cast<bool>(expected));
+    REQUIRE(lowered.instructions == expected.instructions);
+    // A or C naming a register, other mode bits or source flags stay rejected.
+    for (const auto& [word, value] : std::array<std::pair<u32, u32>, 4>{
+             {{0, 0x04097243U}, {2, 0x0000c404U}, {2, 0x0000c5ffU}, {1, 0x40000009U}}}) {
+        auto invalid = packed;
+        invalid[0].words[word] = value;
+        REQUIRE_FALSE(static_cast<bool>(LowerToMaxwell(invalid)));
+    }
 }
 
 TEST_CASE("Ampere FRND lowers a constant-buffer source", "[video_core][ampere]") {

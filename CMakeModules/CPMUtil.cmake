@@ -1050,9 +1050,19 @@ function(AddCIPackage)
         set(sha512sum_file
             "${CMAKE_CURRENT_BINARY_DIR}/.cpmutil_${ARTIFACT}_sha512sum")
 
-        file(DOWNLOAD "${sha512sum_url}" "${sha512sum_file}"
-            STATUS sha512sum_status)
-        list(GET sha512sum_status 0 sha512sum_error)
+        # A single failed request used to end the configure (Windows PGO job of the 0.7.2 release
+        # run), so the download is tried a few times.
+        foreach(sha512sum_attempt RANGE 1 4)
+            file(DOWNLOAD "${sha512sum_url}" "${sha512sum_file}"
+                STATUS sha512sum_status TIMEOUT 60 INACTIVITY_TIMEOUT 20)
+            list(GET sha512sum_status 0 sha512sum_error)
+            if(NOT sha512sum_error)
+                break()
+            endif()
+            message(WARNING "[CPMUtil] sha512sum download for ${ARTIFACT_NAME} failed "
+                "(attempt ${sha512sum_attempt}): ${sha512sum_status}")
+            execute_process(COMMAND ${CMAKE_COMMAND} -E sleep 5)
+        endforeach()
 
         if(sha512sum_error)
             message(FATAL_ERROR "[CPMUtil] Failed to download sha512sum "

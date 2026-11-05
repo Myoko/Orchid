@@ -1,8 +1,16 @@
 name: release-binaries
 
-# Manual only: Actions > release-binaries > Run workflow, or `gh workflow run release-binaries.yml --ref <branch>`.
-# Pushes and pull requests never start a build.
+# Releases are manual: Actions > release-binaries > Run workflow, or
+# `gh workflow run release-binaries.yml --ref <branch>`. A push to main builds every platform
+# without publishing, only to keep the compiler caches warm: a release built right after it hits
+# the cache for nearly every object, so the Windows jobs take minutes instead of most of an hour.
+# Pull requests never start a build.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -20,8 +28,9 @@ permissions:
 env:
   PGO_LLVM_VERSION: "23.1.4"
 
+# A newer push cancels the older cache build; a release never cancels or waits for one.
 concurrency:
-  group: release-binaries-${{ github.ref }}
+  group: release-binaries-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +42,9 @@ jobs:
   name:
     name: Name the build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
     outputs:
       channel: ${{ steps.name.outputs.channel }}
       tag: ${{ steps.name.outputs.tag }}
@@ -72,10 +84,36 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Build $tag, previous release of the channel: ${previous:-none}"
 
+      # The repository's caches are capped at 10 GB. Every run saves a fresh object cache per
+      # platform, so the total passed 12 GB, GitHub evicted the least recently used entries (the
+      # Windows object caches among them) and the MSVC build recompiled a third of the tree. Only
+      # the newest cache per key prefix is ever restored, so the older ones go, and so do caches of
+      # other branches, which main cannot restore.
+      - name: Prune old caches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 1000 --json id,key,ref,createdAt --jq '
+            map(.prefix = (.key | sub("-?[0-9a-f]{32,64}$"; "")))
+            | (map(select(.ref != "refs/heads/main" and .ref != env.GITHUB_REF))
+               + (map(select(.ref == "refs/heads/main" or .ref == env.GITHUB_REF))
+                  | group_by([.ref, .prefix]) | map(sort_by(.createdAt) | .[:-1]) | add // []))
+            | .[] | "\(.id) \(.key)"' |
+          while read -r id key; do
+            echo "Deleting $key"
+            # Another run may have deleted it first.
+            gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+          done
+
   build:
     name: ${{ matrix.platform }} binary
     needs: name
     runs-on: ${{ matrix.runner }}
+    # A stalled step otherwise holds the release for GitHub's 6 hour default. The slowest job, the
+    # Windows MSVC build without a usable cache, takes about an hour.
+    timeout-minutes: 90
     env:
       BUILD_TAG: ${{ needs.name.outputs.tag }}
       ASSET_NAME: orchid-${{ needs.name.outputs.tag }}-${{ matrix.platform }}
@@ -115,22 +153,61 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
+      # The package downloads sometimes crawl at 20-50 kB/s on a runner, from Azure's Ubuntu mirror
+      # and from archive.ubuntu.com alike (the first 0.7.2 run sat here for over 15 minutes, against
+      # 45 s normally), while the package lists come in fast. The .deb files (about 120 MB per
+      # architecture) therefore come from the Actions cache, and apt only downloads what changed.
+      - name: Cache apt packages
+        if: startsWith(matrix.platform, 'linux')
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/release-binaries.yml') }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'linux')
         shell: bash
+        # Each attempt is timed out, and the retries switch to Ubuntu's own archive. Qt comes from
+        # install-qt-action (6.8.3), which CMake and linuxdeploy use, so Ubuntu's Qt 6.4 packages
+        # are not installed.
+        timeout-minutes: 25
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            autoconf cmake g++ gcc git glslang-tools libglu1-mesa-dev \
-            libpulse-dev libtool libudev-dev libxkbcommon-x11-0 \
-            mesa-common-dev nasm ninja-build qt6-base-private-dev \
-            qt6-charts-dev qt6-tools-dev libavfilter-dev libavcodec-dev \
-            libswscale-dev pkg-config zlib1g-dev libva-dev libvdpau-dev \
-            spirv-tools spirv-headers libusb-1.0-0-dev \
-            libboost-dev libboost-fiber-dev libboost-context-dev \
-            libopus-dev libasound2-dev ccache \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+          set -euo pipefail
+          debs="$RUNNER_TEMP/apt-debs"
+          mkdir -p "$debs"
+          if compgen -G "$debs/*.deb" > /dev/null; then
+            sudo cp "$debs"/*.deb /var/cache/apt/archives/
+          fi
+          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          packages=(
+            autoconf cmake g++ gcc git glslang-tools libglu1-mesa-dev
+            libpulse-dev libtool libudev-dev libxkbcommon-x11-0
+            mesa-common-dev nasm ninja-build libavfilter-dev libavcodec-dev
+            libswscale-dev pkg-config zlib1g-dev libva-dev libvdpau-dev
+            spirv-tools spirv-headers libusb-1.0-0-dev
+            libboost-dev libboost-fiber-dev libboost-context-dev
+            libopus-dev libasound2-dev ccache
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+          )
+          for attempt in 1 2 3; do
+            if [ "$attempt" -gt 1 ]; then
+              sudo sed -i 's|http://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2> /dev/null || true
+            fi
+            if sudo timeout 180 apt-get "${apt_opts[@]}" update &&
+               sudo timeout 420 apt-get "${apt_opts[@]}" install -y --no-install-recommends "${packages[@]}"; then
+              # Keep exactly the packages of this install for the cache.
+              rm -f "$debs"/*.deb
+              cp /var/cache/apt/archives/*.deb "$debs"/
+              exit 0
+            fi
+            echo "::warning::apt attempt $attempt failed or timed out"
+            sleep 15
+          done
+          exit 1
 
       - name: Install Qt on Linux x86_64
         if: startsWith(matrix.platform, 'linux') && runner.arch != 'ARM64'
@@ -243,7 +320,7 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'sccache.zip'
-          Invoke-WebRequest -OutFile $zip https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
+          Invoke-WebRequest -MaximumRetryCount 5 -RetryIntervalSec 10 -OutFile $zip https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
           Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'sccache')
           $bin = (Get-ChildItem -Recurse -Filter sccache.exe (Join-Path $env:RUNNER_TEMP 'sccache')).DirectoryName
           $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
@@ -260,8 +337,28 @@ jobs:
 
       # Eden builds its Windows PGO binaries with MSYS2's clang toolchain, so we do the same. The
       # package list is docs/Deps.md (MSYS2) plus what the bundled FFmpeg needs to compile.
+      # repo.msys2.org answered one 0.7.2 test run with HTTP 504, so a failed setup gets one retry.
       - name: Set up MSYS2
+        id: msys2
         if: matrix.mingw
+        continue-on-error: true
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            git make autoconf libtool automake-wrapper patch jq pactoys ninja
+          pacboy: >-
+            toolchain:p clang:p lld:p cmake:p python-pip:p
+            qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
+            openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
+            vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
+            libusb:p unordered_dense:p jbigkit:p xz:p libdeflate:p bzip2:p
+            lerc:p graphite2:p libwebp:p libtiff:p brotli:p ccache:p
+
+      - name: Set up MSYS2 (retry)
+        if: matrix.mingw && steps.msys2.outcome == 'failure'
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64

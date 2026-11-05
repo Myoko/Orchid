@@ -131,7 +131,7 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
         // instruction, see register_pressure.h) or rejected.
         bool requires_shadow = false;
         for (u32 bit : {16U, 24U, 32U, 64U}) {
-            if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0xf60 && opcode != 0xf6c && opcode != 0x988 && opcode != 0xf66) continue;
+            if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0xf60 && opcode != 0xf6c && opcode != 0x988 && opcode != 0xf66 && opcode != 0x927) continue;
             const u32 reg = insn.Bits(bit, 8);
             if (reg >= (uses_uniform_bank ? 216U : 246U) && reg < 255) requires_shadow = true;
             else if (reg < 255) highest_source = std::max(highest_source, reg);
@@ -1831,6 +1831,16 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                 return fail(index, "native fragment discard mode");
             emit(0xe33000000000000fULL | predicate);
             break;
+        case 0x243: // F2IP.U8.F32.NTZ Rd, RZ, Rb, RZ (Ocarina of Time's scene vertex shaders)
+            // Converts B into byte 0 and A into byte 1, C[15:0] above them (PTX cvt.pack order, as
+            // F2FP's merge). With A and C RZ that is the byte F2I of Rb. Bit 74 is unverified, so
+            // only this exact mode word is taken (Lichii lowers it the same way).
+            if (insn.Bits(24, 8) != 255 || (insn.words[1] & ~0xffU) || insn.words[2] != 0x0000c4ffU)
+                return fail(index, "native packed float-to-byte mode");
+            insn.words[0] &= 0x00ffffffU;
+            insn.words[2] = 0x0020e000U; // byte F2I: unsigned, truncating
+            opcode = 0x305;
+            [[fallthrough]];
         case 0x305: case 0xb05: case 0xd05: { // F2I NTZ, register/constant-buffer/uniform source
             const u32 mode = insn.words[2] & ~(opcode == 0xd05 ? 0x08000000U : 0U);
             // F16 source (bit 72 signed result, bit 60 selects the high half), e.g. Hyrule Warriors.
