@@ -1214,11 +1214,9 @@ ImageView::~ImageView() = default;
 GLuint ImageView::StorageView(Shader::TextureType texture_type, Shader::ImageFormat image_format) {
     if (image_format == Shader::ImageFormat::Typeless)
         return Handle(texture_type);
-    const bool is_signed = image_format == Shader::ImageFormat::R8_SINT
-        || image_format == Shader::ImageFormat::R16_SINT;
     if (!storage_views)
         storage_views = {OpenGL::ImageView::StorageViews{}};
-    auto& type_views{is_signed ? storage_views->signeds : storage_views->unsigneds};
+    auto& type_views{storage_views->formats[static_cast<size_t>(image_format)]};
     GLuint& view{type_views[size_t(texture_type)]};
     if (view == 0)
         view = MakeView(texture_type, ShaderFormat(image_format));

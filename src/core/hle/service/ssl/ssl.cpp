@@ -204,7 +204,7 @@ private:
                 return ResultInvalidSocket;
             }
             socket = std::move(*sock);
-            backend->SetSocket(std::move(socket));
+            backend->SetSocket(socket);
             return ResultSuccess;
         }
         LOG_ERROR(Service_SSL, "Failed to duplicate socket with fd {}", in_fd);
@@ -455,9 +455,9 @@ private:
 
 class ISslContext final : public ServiceFramework<ISslContext> {
 public:
-    explicit ISslContext(Core::System& system_, SslVersion version)
-        : ServiceFramework{system_, "ISslContext"}, ssl_version{version},
-          shared_data{std::make_shared<SslContextSharedData>()} {
+    explicit ISslContext(Core::System& system_, SslVersion version, bool for_system = false)
+        : ServiceFramework{system_, for_system ? "ISslContextForSystem" : "ISslContext"},
+          ssl_version{version}, shared_data{std::make_shared<SslContextSharedData>()} {
         static const FunctionInfo functions[] = {
             {0, &ISslContext::SetOption, "SetOption"},
             {1, &ISslContext::GetOption, "GetOption"},
@@ -475,6 +475,13 @@ public:
             {13, nullptr, "GeneratePrivateKeyAndCert"},
         };
         RegisterHandlers(functions);
+        if (for_system) {
+            // ISslContextForSystem adds CreateConnectionEx.
+            static const FunctionInfo system_functions[] = {
+                {100, &ISslContext::CreateConnection, "CreateConnectionEx"},
+            };
+            RegisterHandlers(system_functions);
+        }
     }
 
 private:
@@ -666,8 +673,8 @@ class ISslServiceForSystem final : public ServiceFramework<ISslServiceForSystem>
         };
 
         // 0 and 100(SslVersion, padding, u64 pid placeholder; pid): an ISslContext, like ssl's
-        // CreateContext. The empty reply returned no object, so the caller got handle 0
-        // (Minecraft calls 100).
+        // CreateContext; 100 returns ISslContextForSystem, which adds CreateConnectionEx. The empty
+        // reply returned no object, so the caller got handle 0 (Minecraft calls 100).
         void CreateContext(HLERequestContext& ctx) {
             struct Parameters {
                 SslVersion ssl_version;
@@ -683,7 +690,8 @@ class ISslServiceForSystem final : public ServiceFramework<ISslServiceForSystem>
 
             IPC::ResponseBuilder rb{ctx, 2, 0, 1};
             rb.Push(ResultSuccess);
-            rb.PushIpcInterface<ISslContext>(ctx, system, parameters.ssl_version);
+            rb.PushIpcInterface<ISslContext>(ctx, system, parameters.ssl_version,
+                                             ctx.GetCommand() == 100);
         }
 
         Result GetContextCount(Out<u32> out_count) {

@@ -44,9 +44,19 @@ void CopyNameToEntry(FileSys::LanguageEntry& entry, std::string_view name) {
     entry.application_name[length] = '\0';
 }
 
+void CopyDeveloperToEntry(FileSys::LanguageEntry& entry, std::string_view developer) {
+    const std::size_t length = std::min(developer.size(), entry.developer_name.size() - 1);
+    std::memcpy(entry.developer_name.data(), developer.data(), length);
+    entry.developer_name[length] = '\0';
+}
+
 std::unique_ptr<FileSys::NACP> BuildNacp(const NupContainer::PackageInfo& base,
                                          const std::string& version) {
-    if (base.title_name.empty() && base.localized_titles.empty() && version.empty()) {
+    // A package without a title name is still named after the dump it was made from.
+    const std::string& effective_title =
+        !base.title_name.empty() ? base.title_name : base.source_dump;
+    if (effective_title.empty() && base.localized_titles.empty() && base.publisher.empty() &&
+        version.empty()) {
         return nullptr;
     }
     auto nacp = std::make_unique<FileSys::NACP>();
@@ -61,8 +71,13 @@ std::unique_ptr<FileSys::NACP> BuildNacp(const NupContainer::PackageInfo& base,
             }
         }
     }
-    if (!base.title_name.empty()) {
-        CopyNameToEntry(nacp->raw.language_entries.language_entries[0], base.title_name);
+    if (!effective_title.empty()) {
+        CopyNameToEntry(nacp->raw.language_entries.language_entries[0], effective_title);
+    }
+    if (!base.publisher.empty()) {
+        for (auto& entry : nacp->raw.language_entries.language_entries) {
+            CopyDeveloperToEntry(entry, base.publisher);
+        }
     }
     if (!version.empty()) {
         const std::size_t length = std::min(version.size(), nacp->raw.version_string.size() - 1);

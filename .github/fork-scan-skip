@@ -111,3 +111,31 @@ f4eea1b0b FZout/Eglantine: NUM_STORAGE_BUFFERS already MAX_SSBOS (32)
 f9ce89d57 yumekiru/Eglantine-WiimoteSupport: Wiimote MotionPlus, feature
 fe6e26379 Greencus/Eglantine: merge duplicate cleanup of its own merge
 fed938450 ominixisboss/Eglantine: memory_tracker mock + core timing reset, already in Orchid
+1ca9f7d5c zortos293/Eglantine: signed relocation compare in the geometry EXIT check already in Orchid
+edf916344 zortos293/Eglantine: MSVC shadowing fixes, Orchid's lowering has no such shadowed names (fire_emblem half is not shader)
+fe8d0dda8 zortos293/Eglantine: full-width IMNMX immediate and SURED buffer dimension already in Orchid
+546cb6782 zortos293/Eglantine: shader parts (geometry RET, FMUL shadow, atomic carry pointers, dither phi) already in Orchid or done differently there
+7c27fdec8 zortos293/Eglantine: earlier copy of 4a58842d2
+be5bff1d3 zortos293/Eglantine: tess eval TessCoord ALD.O already in Orchid's lowering
+078b720a2 zortos293/Eglantine: same as be5bff1d3, tess coord reads already in Orchid
+28cf8e206 zortos293/Eglantine: native tessellation patch ALD/AST/ISBERD already in Orchid (TessellationStage)
+7a9dd3710 zortos293/Eglantine: same as 28cf8e206, already in Orchid
+19a4cf549 zortos293/Eglantine: comments in a tennis tessellation test Orchid doesn't have
+ff8d461cb zortos293/Eglantine: guarded ULEA already accepted by Orchid's uniform guard
+93821e84c zortos293/Eglantine: drops a duplicate 0x59f case Orchid never had
+eaeb09b09 zortos293/Eglantine: MUFU.TANH already lowered in Orchid (EX2/RCP expansion), no FPTanh IR op needed
+388529d14 zortos293/Eglantine: GLSL FPTanh, an IR op Orchid doesn't have
+f130f0c50 zortos293/Eglantine: FE DLSS network ops (HMMA, LDSM, LDGSTS, HSET2, TRAP) already lowered by Orchid, 768-register shadow bank not needed
+448fdaed9 zortos293/Eglantine: only needed with the zortos/Djihads unmapped-pointer rule, Orchid's storage buffer pass binds the pointer directly
+e942bb7e8 zortos293/Eglantine: routed global atomic add builds on native_global_bounds candidate binding Orchid doesn't have
+ca6b8e3ca zortos293/Eglantine: same as e942bb7e8
+c1fcb8dab zortos293/Eglantine: prerequisites for ca6b8e3ca's storage routing, not in Orchid
+07a155d7b zortos293/Eglantine: narrow storage CAS helper guard already in Orchid
+d5b258210 zortos293/Eglantine: shader part (Djihads PR 123: UPOPC, ATOMG ops, SUATOM, 1D surfaces) already in Orchid; non-shader parts for other owners
+09477e13a zortos293/Eglantine: shader-sweep offline tool, debug-only tooling Orchid doesn't ship
+cc52d21d3 zortos293/Eglantine: shader-sweep v48 support and sweep result docs, tooling Orchid doesn't have
+4336c210d zortos293/Eglantine: shader-sweep tessellation flag, tooling Orchid doesn't have
+f314dc672 zortos293/Eglantine: shader-sweep cache format flag, tooling Orchid doesn't have
+51c850a79 zortos293/Eglantine: static shader extraction and NUP export tooling, debug-only
+5c3581501 zortos293/Eglantine: native rejection capture diagnostics, debug-only
+7d9596a4b zortos293/Eglantine: rejected-stage capture diagnostics, debug-only

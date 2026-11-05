@@ -117,6 +117,8 @@ public:
 
         std::vector<u8> npdm;
         std::string title_name;
+        std::string publisher;
+        std::string source_dump; ///< Name of the dump the package was made from
         std::vector<std::pair<std::string, std::string>> localized_titles;
         std::vector<u8> icon;
         std::vector<std::pair<std::string, std::vector<u8>>> localized_icons;

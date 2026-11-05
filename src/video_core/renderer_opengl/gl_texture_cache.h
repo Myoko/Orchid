@@ -294,8 +294,8 @@ public:
 
 private:
     struct StorageViews {
-        std::array<GLuint, Shader::NUM_TEXTURE_TYPES> signeds{};
-        std::array<GLuint, Shader::NUM_TEXTURE_TYPES> unsigneds{};
+        std::array<std::array<GLuint, Shader::NUM_TEXTURE_TYPES>,
+                   static_cast<size_t>(Shader::ImageFormat::R32G32B32A32_UINT) + 1> formats{};
     };
 
     void SetupView(Shader::TextureType view_type);

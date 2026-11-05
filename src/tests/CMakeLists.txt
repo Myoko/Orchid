@@ -39,6 +39,7 @@ add_executable(tests
     core/priority_queue.cpp
     core/vfs_vector.cpp
     core/internal_network/network.cpp
+    video_core/aftermath_dump.cpp
     video_core/memory_tracker.cpp
     video_core/memory_budget.cpp
     video_core/astc_recompression_override.cpp
@@ -55,10 +56,14 @@ add_executable(tests
     video_core/nx2_command_sync.cpp
     video_core/nx2_command_ranges.cpp
     video_core/physical_alias.cpp
+    video_core/h264_packet.cpp
+    video_core/framebuffer_clear_layers.cpp
     video_core/vertex_repack.cpp
     video_core/ampere_lowering.cpp
     video_core/ampere_returns.cpp
     video_core/ampere_f2i.cpp
+    video_core/ampere_i2f64.cpp
+    video_core/ampere_uniform_fset.cpp
     video_core/compute_storage_buffers.cpp
     video_core/cooperative_matrix.cpp
     video_core/ampere_kirby.cpp
@@ -76,6 +81,8 @@ add_executable(tests
     video_core/ampere_yoshi_surface.cpp
     video_core/ampere_release_guards.cpp
     video_core/ampere_release_f2i.cpp
+    video_core/ampere_uniform_immediate_shift.cpp
+    video_core/ampere_bindless_surfaces.cpp
     video_core/syncpoint_manager.cpp
     video_core/native_macro_fifo.cpp
     video_core/uniform_stream_reuse.cpp

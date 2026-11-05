@@ -1017,6 +1017,20 @@ private:
 
     // Needs m_region_mutex.
     std::optional<u64> BackGpuOnlyRegion(u64 gpu_address, u64 size) {
+        // A title may create a region again from the same start with another size (Mario Kart
+        // World: 300 MB, 600 MB, 1 GB at one address) without destroying it. Overwriting the entry
+        // kept the old backing mapped and its pages out of the pool for good: release it as 215
+        // does, once the GPU thread is past it.
+        if (const auto it = m_gpu_only_regions.find(gpu_address); it != m_gpu_only_regions.end()) {
+            auto& registry = Nvidia::Devices::Nx2GpuMemoryRegistry::Get();
+            registry.Unmap(gpu_address, it->second.size);
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            registry.ReleaseBacking(it->second.cpu_address, it->second.size, [&sys = system, done] {
+                GpuCommands::Run(sys.GPU(), [done] { done->store(true, std::memory_order_release); });
+            });
+            m_released_regions.push_back({std::move(it->second), done});
+            m_gpu_only_regions.erase(it);
+        }
         auto backing = AllocateGpuOnlyBacking(size, true, false);
         if (!backing) {
             return std::nullopt;
@@ -2598,6 +2612,7 @@ private:
             std::scoped_lock lk{m_mutex};
             m_inputs.push_back(std::move(input));
             m_stream_ended = false;
+            m_end_queued = end;
             m_ready->room.store(!end && m_inputs.size() < MaxQueuedInputs, std::memory_order_relaxed);
         }
         m_cv.notify_one();
@@ -2619,6 +2634,7 @@ private:
             std::erase_if(m_outputs, [](const Output& output) { return output.after_end; });
             m_flush = true;
             m_stream_ended = false;
+            m_end_queued = false;
             m_ready->room.store(true, std::memory_order_relaxed);
             // Only Stop: Bananza flushes (8) after its movies end and treats every completed
             // fence as a frame to acquire.
@@ -2727,6 +2743,7 @@ private:
                 m_out_height = height;
                 if (frame.end) {
                     m_stream_ended = true;
+                    m_end_queued = false;
                     m_ready->room.store(false, std::memory_order_relaxed);
                 }
                 system.Host1x().GetSyncpointManager().IncrementGuest(m_syncpoint);
@@ -2740,7 +2757,9 @@ private:
             }
             Input input = std::move(m_inputs.front());
             m_inputs.pop_front();
-            if (!m_stream_ended) {
+            // Not while the end-of-stream input is still being decoded either: re-arming here
+            // would bring back the spurious wakeups before its frame is out.
+            if (!m_stream_ended && !m_end_queued) {
                 m_ready->room.store(m_inputs.size() < MaxQueuedInputs, std::memory_order_relaxed);
             }
             if ((!decoder || !decoder->IsOpen()) &&
@@ -2931,6 +2950,7 @@ private:
     std::map<u32, Fence> m_release_fences;
     std::deque<Output> m_outputs;      ///< Finished, for 213
     bool m_stream_ended{};             ///< End-of-stream frame handed out, nothing submitted since
+    bool m_end_queued{};               ///< End-of-stream input submitted, its frame not out yet
     bool m_flush{};
     bool m_quit{};
     std::thread m_worker;

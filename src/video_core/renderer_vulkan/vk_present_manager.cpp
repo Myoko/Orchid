@@ -424,7 +424,11 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
                 surface_recreation_pending = true;
                 break;
             }
-            if (except.GetResult() != VK_ERROR_SURFACE_LOST_KHR) {
+            // A swapchain that is out of date or whose window is busy is recreated like a lost
+            // surface.
+            const VkResult result = except.GetResult();
+            if (result != VK_ERROR_SURFACE_LOST_KHR && result != VK_INCOMPLETE &&
+                result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
                 throw;
             }
 
@@ -444,6 +448,10 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         swapchain.GetWidth() != frame->width || swapchain.GetHeight() != frame->height;
     if (is_suboptimal || size_changed) {
         RecreateSwapchain(frame);
+    }
+    if (!swapchain.IsCreated()) {
+        DiscardFrame(frame);
+        return;
     }
 
     while (swapchain.AcquireNextImage(!use_present_thread)) {

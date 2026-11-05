@@ -109,8 +109,11 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             .flags = flags,
             .stage{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .pNext =
-                    device.IsExtSubgroupSizeControlSupported() ? &subgroup_size_ci : nullptr,
+                // The required size may only be given for a stage the device lists for it.
+                .pNext = device.IsExtSubgroupSizeControlSupported() &&
+                                 device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT)
+                             ? &subgroup_size_ci
+                             : nullptr,
                 .flags = info.uses_tensor_mul_add
                              ? VkPipelineShaderStageCreateFlags{
                                    VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT}

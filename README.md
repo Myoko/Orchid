@@ -189,6 +189,15 @@ source and author in its message.
   Kinzett (NV12 video decoder), Jonas via jojo-chaechae (x64 call reach, Switch 2 channel setup),
   SavageCore (mod root guards), cblock85, christianball123, Khobzpro, larryliu985, Doughston
   (n-popescu) and Xnos666.
+- After 0.7.0: Zortos (native BRA.U, register-handle image access, uniform shifts, global memory
+  helpers, the H.264 decoder reset, Aftermath dumps, Switch 2 mixer stream audio), zirulo via Zortos
+  (the Ocarina of Time boot fix), Paulo Rossatto (loose base dumps, GPU-only regions, 2D blit
+  formats), Raikaru (ssl:s contexts and socket timeouts), Mcm190 (H.264 packet framing), Yuri Olive
+  (decoder end of stream), rdenno (fence download ranges), kraibse (tessellation pipelines), a55uka
+  (contentless NUP sections), Andreas Heider (ANV barriers), Aidan Kinzett (button glyphs), Jonas
+  (H0_NH1 halves), exploitizm (IMAD, I2F and FSET lowering, memory manager reference counts),
+  christianball123 (device index fallback), kdegonia-star (global atomic add) and Takoroka (ISETP.EX
+  and UIMAD.WIDE lowering).
 - rdenno: the Mario Tennis Fever fixes in 0.5.1.
 
 ## License

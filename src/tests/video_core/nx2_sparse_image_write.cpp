@@ -75,8 +75,10 @@ TEST_CASE("Sparse upload failures retain initialization work for the next attemp
     CHECK_FALSE(written);
     CHECK(flags == original);
     REQUIRE(pending.size() == 1);
+    bool one_rect = false;
     CHECK(PrepareSparseImageWrite(flags, pending, [](auto&) { return true; },
-                                 [](const auto& rects) { REQUIRE(rects.size() == 1); }));
+                                 [&](const auto& rects) { one_rect = rects.size() == 1; }));
+    CHECK(one_rect);
     CHECK(pending.empty());
     CHECK(False(flags & ImageFlagBits::SparseTiles));
 }

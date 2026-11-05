@@ -313,6 +313,10 @@ public:
         return render_area;
     }
 
+    [[nodiscard]] u32 Layers() const noexcept {
+        return layers;
+    }
+
     [[nodiscard]] VkSampleCountFlagBits Samples() const noexcept {
         return samples;
     }
@@ -367,6 +371,7 @@ private:
     vk::Framebuffer framebuffer;
     VkRenderPass renderpass{};
     VkExtent2D render_area{};
+    u32 layers = 1;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     u32 num_color_buffers = 0;
     u32 num_images = 0;
@@ -687,8 +692,9 @@ public:
 
 private:
     struct StorageViews {
-        std::array<vk::ImageView, Shader::NUM_TEXTURE_TYPES> signeds;
-        std::array<vk::ImageView, Shader::NUM_TEXTURE_TYPES> unsigneds;
+        std::array<std::array<vk::ImageView, Shader::NUM_TEXTURE_TYPES>,
+                   static_cast<size_t>(Shader::ImageFormat::R32G32B32A32_UINT) + 1>
+            formats;
     };
 
     [[nodiscard]] vk::ImageView MakeView(VkFormat vk_format, VkImageAspectFlags aspect_mask,

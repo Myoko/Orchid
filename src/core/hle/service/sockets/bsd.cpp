@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -889,6 +890,26 @@ Errno BSD_USA::SetSockOptImpl(s32 fd, u32 level, OptName optname, std::span<cons
         return Translate(socket->SetLinger(linger.onoff != 0, linger.linger));
     }
 
+    if (optname == OptName::SNDTIMEO || optname == OptName::RCVTIMEO) {
+        // A timeval of two 64-bit fields (libnx, FreeBSD); a shorter or out-of-range one fails
+        // with EINVAL. Rounded up to milliseconds so that a nonzero timeout stays one, capped.
+        if (optval.size() < 2 * sizeof(s64)) {
+            return Errno::INVAL;
+        }
+        const s64 seconds = GetValue<s64>(optval);
+        const s64 microseconds = GetValue<s64>(optval.subspan(sizeof(s64)));
+        if (seconds < 0 || microseconds < 0 || microseconds >= 1'000'000) {
+            return Errno::INVAL;
+        }
+        constexpr s64 max_timeout_ms = (std::numeric_limits<u32>::max)();
+        const u32 timeout_ms = static_cast<u32>(
+            seconds >= max_timeout_ms / 1000
+                ? max_timeout_ms
+                : (std::min)(max_timeout_ms, seconds * 1000 + (microseconds + 999) / 1000));
+        return Translate(optname == OptName::RCVTIMEO ? socket->SetRcvTimeo(timeout_ms)
+                                                      : socket->SetSndTimeo(timeout_ms));
+    }
+
     ASSERT(optval.size() == sizeof(u32));
     auto value = GetValue<u32>(optval);
 
@@ -906,10 +927,6 @@ Errno BSD_USA::SetSockOptImpl(s32 fd, u32 level, OptName optname, std::span<cons
         return Translate(socket->SetSndBuf(value));
     case OptName::RCVBUF:
         return Translate(socket->SetRcvBuf(value));
-    case OptName::SNDTIMEO:
-        return Translate(socket->SetSndTimeo(value));
-    case OptName::RCVTIMEO:
-        return Translate(socket->SetRcvTimeo(value));
     case OptName::NOSIGPIPE:
         LOG_WARNING(Service, "(STUBBED) setting NOSIGPIPE to {}", value);
         return Errno::SUCCESS;

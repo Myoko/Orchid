@@ -79,6 +79,7 @@ add_library(video_core STATIC
     host1x/control.h
     host1x/gpu_device_memory_manager.cpp
     host1x/gpu_device_memory_manager.h
+    host1x/h264_packet.h
     host1x/host1x.cpp
     host1x/host1x.h
     host1x/nvdec.cpp
@@ -153,6 +154,7 @@ add_library(video_core STATIC
     renderer_vulkan/blit_image.h
     renderer_vulkan/fixed_pipeline_state.cpp
     renderer_vulkan/fixed_pipeline_state.h
+    renderer_vulkan/framebuffer_clear_layers.h
     renderer_vulkan/maxwell_to_vk.cpp
     renderer_vulkan/maxwell_to_vk.h
     renderer_vulkan/pipeline_helper.h
@@ -234,6 +236,7 @@ add_library(video_core STATIC
     vulkan_common/vulkan_wrapper.cpp
     vulkan_common/vulkan_wrapper.h
     vulkan_common/nsight_aftermath_tracker.cpp
+    vulkan_common/aftermath_dump.h
     vulkan_common/nsight_aftermath_tracker.h
     vulkan_common/vma.h
     vulkan_common/vulkan.h

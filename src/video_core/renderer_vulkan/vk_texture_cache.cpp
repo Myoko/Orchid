@@ -4050,11 +4050,9 @@ VkImageView ImageView::StorageView(Shader::TextureType texture_type,
             }
             return *typeless_storage_view;
         }
-        const bool is_signed = image_format == Shader::ImageFormat::R8_SINT
-            || image_format == Shader::ImageFormat::R16_SINT;
         if (!storage_views)
             storage_views.emplace();
-        auto& views{is_signed ? storage_views->signeds : storage_views->unsigneds};
+        auto& views{storage_views->formats[static_cast<size_t>(image_format)]};
         auto& view{views[size_t(texture_type)]};
         if (!view)
             view = MakeView(Format(image_format), VK_IMAGE_ASPECT_COLOR_BIT, texture_type);
@@ -4409,6 +4407,7 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     if (num_layers == (std::numeric_limits<s32>::max)()) {
         num_layers = 1;
     }
+    layers = static_cast<u32>((std::max)(num_layers, 1));
     renderpass_key.samples = samples;
     const bool do_resolve_color = ENABLE_MSAA_TILER_RESOLVE &&
         samples != VK_SAMPLE_COUNT_1_BIT && num_colors > 0 && runtime.device.IsTiler();
@@ -4433,7 +4432,6 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     render_area.height = (std::min)(render_area.height, height);
 
     if (do_resolve_color) {
-        const u32 layers = static_cast<u32>((std::max)(num_layers, 1));
         for (size_t index = 0; index < NUM_RT; ++index) {
             const PixelFormat format = renderpass_key.color_formats[index];
             if (format == PixelFormat::Invalid) {
@@ -4449,7 +4447,6 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     }
 
     if (do_resolve_depth_stencil) {
-        const u32 layers = static_cast<u32>((std::max)(num_layers, 1));
         const VkFormat vk_format =
             MaxwellToVK::SurfaceFormat(runtime.device, FormatType::Optimal, true,
                                        renderpass_key.depth_format)
@@ -4469,7 +4466,7 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
         .pAttachments = attachments.data(),
         .width = render_area.width,
         .height = render_area.height,
-        .layers = static_cast<u32>((std::max)(num_layers, 1)),
+        .layers = layers,
     });
 }
 

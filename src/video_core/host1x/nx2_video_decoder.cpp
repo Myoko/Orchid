@@ -11,6 +11,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/host1x/ffmpeg.h"
+#include "video_core/host1x/h264_packet.h"
 #include "video_core/host1x/nx2_video_decoder.h"
 
 extern "C" {
@@ -145,6 +146,7 @@ struct Nx2VideoDecoder::Impl {
     std::optional<FFmpeg::DecoderContext> context;
     SwsContext* scaler{};
     bool open{};
+    H264PacketConverter h264_packets;
     /// Timestamps of submitted frames not yet output. Frames copied back from a host GPU decoder
     /// lose theirs and take the earliest one instead.
     std::multiset<u64> pending_pts;
@@ -222,26 +224,7 @@ void Nx2VideoDecoder::Decode(std::span<const u8> data, u64 pts, std::vector<Nx2P
 
     // Convert MP4/avcC length-prefixed NALUs to Annex-B start codes for FFmpeg if needed.
     if (impl->codec == NvdecCommon::VideoCodec::H264) {
-        const bool is_annex_b = data.size() >= 4 &&
-            ((data[0] == 0 && data[1] == 0 && data[2] == 1) ||
-             (data.size() >= 5 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1));
-        if (!is_annex_b && data.size() >= 5) {
-            size_t offset = 0;
-            while (offset + 4 < data.size()) {
-                const u32 nalu_len = (static_cast<u32>(impl->packet[offset]) << 24) |
-                                     (static_cast<u32>(impl->packet[offset + 1]) << 16) |
-                                     (static_cast<u32>(impl->packet[offset + 2]) << 8) |
-                                     static_cast<u32>(impl->packet[offset + 3]);
-                if (nalu_len == 0 || offset + 4 + nalu_len > data.size()) {
-                    break;
-                }
-                impl->packet[offset] = 0;
-                impl->packet[offset + 1] = 0;
-                impl->packet[offset + 2] = 0;
-                impl->packet[offset + 3] = 1;
-                offset += 4 + nalu_len;
-            }
-        }
+        impl->h264_packets.Convert(std::span<u8>{impl->packet.data(), data.size()});
     }
 
     FFmpeg::Packet packet{std::span<const u8>{impl->packet.data(), data.size()}};
@@ -269,6 +252,7 @@ void Nx2VideoDecoder::Reset() {
         avcodec_flush_buffers(impl->context->GetCodecContext());
     }
     impl->pending_pts.clear();
+    impl->h264_packets.Reset();
 }
 
 void Nx2VideoDecoder::Render(const Nx2Picture& picture, Nx2PictureFormat format, u32 width,
@@ -329,20 +313,23 @@ void Nx2VideoDecoder::Render(const Nx2Picture& picture, Nx2PictureFormat format,
                   av_get_pix_fmt_name(target));
         return;
     }
-    const bool full_range_source = f->color_range == AVCOL_RANGE_JPEG;
-    if (format != Nx2PictureFormat::Nv12 || full_range_source) {
-        // The stream's matrix and range; untagged HD video is BT.709. NV12 output is limited range.
-        int space = SWS_CS_ITU601;
-        if (f->colorspace == AVCOL_SPC_BT709 ||
-            (f->colorspace == AVCOL_SPC_UNSPECIFIED && f->height >= 720)) {
-            space = SWS_CS_ITU709;
-        } else if (f->colorspace == AVCOL_SPC_BT2020_NCL || f->colorspace == AVCOL_SPC_BT2020_CL) {
-            space = SWS_CS_BT2020;
-        }
-        const int* coefficients = sws_getCoefficients(space);
-        sws_setColorspaceDetails(impl->scaler, coefficients, full_range_source, coefficients,
-                                 format != Nx2PictureFormat::Nv12, 0, 1 << 16, 1 << 16);
+    // The YUVJ formats are full range even when the frame leaves its range unset.
+    const bool full_range_source =
+        f->color_range == AVCOL_RANGE_JPEG || f->format == AV_PIX_FMT_YUVJ420P ||
+        f->format == AV_PIX_FMT_YUVJ422P || f->format == AV_PIX_FMT_YUVJ444P ||
+        f->format == AV_PIX_FMT_YUVJ440P || f->format == AV_PIX_FMT_YUVJ411P;
+    // The stream's matrix and range; untagged HD video is BT.709. NV12 output is limited range.
+    // Set for every frame: the cached scaler keeps the previous frame's details otherwise.
+    int space = SWS_CS_ITU601;
+    if (f->colorspace == AVCOL_SPC_BT709 ||
+        (f->colorspace == AVCOL_SPC_UNSPECIFIED && f->height >= 720)) {
+        space = SWS_CS_ITU709;
+    } else if (f->colorspace == AVCOL_SPC_BT2020_NCL || f->colorspace == AVCOL_SPC_BT2020_CL) {
+        space = SWS_CS_BT2020;
     }
+    const int* coefficients = sws_getCoefficients(space);
+    sws_setColorspaceDetails(impl->scaler, coefficients, full_range_source, coefficients,
+                             format != Nx2PictureFormat::Nv12, 0, 1 << 16, 1 << 16);
     std::array<u8*, 4> planes{out.data(), nullptr, nullptr, nullptr};
     std::array<int, 4> strides{static_cast<int>(pitch), 0, 0, 0};
     if (format == Nx2PictureFormat::Nv12) {

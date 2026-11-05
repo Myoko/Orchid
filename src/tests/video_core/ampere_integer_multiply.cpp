@@ -42,6 +42,16 @@ struct IntegerMachine {
                 const u32 mode = bits(50, 3);
                 REQUIRE(mode <= 2);
                 result = x * y + (mode == 0 ? c : mode == 1 ? c & 0xffff : c >> 16);
+            } else if ((word & 0xfff0000000000000ULL) == 0x5b60000000000000ULL) {
+                REQUIRE(bits(49, 3) == 5); // ISETP.NE.U32.AND
+                REQUIRE(bits(45, 2) == 0);
+                REQUIRE(bits(48, 1) == 0);
+                REQUIRE(bits(43, 1) == 0);
+                REQUIRE(bits(39, 4) == 7);
+                const bool comparison = a != b;
+                if (bits(3, 3) != 7) predicates[bits(3, 3)] = comparison;
+                if (bits(0, 3) != 7) predicates[bits(0, 3)] = !comparison;
+                continue;
             } else if (opcode == 0x5c10000000000000ULL) {
                 const u32 x = bits(49, 1) ? 0U - a : a;
                 const u32 y = bits(48, 1) ? 0U - b : b;
@@ -66,6 +76,13 @@ struct IntegerMachine {
                 result = (a >> offset) & 0xff;
                 if (bits(48, 1) && (result & 0x80))
                     result |= 0xffffff00;
+            } else if (opcode == 0x5ca0000000000000ULL) {
+                const u32 select = bits(39, 3);
+                const bool take_a = (select == 7 || predicates[select]) != bool(bits(42, 1));
+                result = take_a ? a : b;
+            } else if ((word >> 56) == 0x04) {
+                REQUIRE(bits(53, 2) == 2); // LOP32I.XOR
+                result = a ^ bits(20, 32);
             } else if (opcode == 0x5c98000000000000ULL) {
                 result = b;
             } else if ((word >> 56) == 0x01) {
@@ -275,5 +292,120 @@ TEST_CASE("Ampere integer multiplication rejects unsupported modifiers",
     for (const u32 bit : {8U, 11U, 12U, 13U, 15U}) {
         const Instruction invalid{{0x02007226, 4, 6U | (1U << bit), 0}};
         REQUIRE_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
+    }
+}
+
+
+TEST_CASE("Ampere zero-product IMAD X preserves complemented addends and carry predicates",
+          "[video_core][ampere][integer_multiply]") {
+    for (const bool complement : {false, true}) {
+        for (const bool invert_carry : {false, true}) {
+            for (u32 carry = 0; carry < 8; ++carry) {
+                for (const u32 source : {2U, 255U}) {
+                    for (const u32 dest : {2U, 4U, 6U}) {
+                        for (const u32 guard : {0U, 1U, 7U, 8U, 9U, 15U}) {
+                            for (const u32 value : {0U, 1U, 0x7fffffffU, 0x80000000U, ~0U}) {
+                                auto machine = SeedMachine();
+                                machine.registers[2] = value;
+                                const auto before = machine;
+                                const Instruction instruction{{
+                                    0x224U | (guard << 12) | (dest << 16) | (255U << 24),
+                                    255,
+                                    0x000e0400U | source | (u32{complement} << 11) |
+                                        (carry << 23) | (u32{invert_carry} << 26), 0}};
+                                const auto lowered = LowerToMaxwell(std::array{instruction, Exit});
+                                INFO(lowered.error);
+                                REQUIRE(lowered);
+                                const bool active =
+                                    ((guard & 7) == 7 || before.predicates[guard & 7]) != bool(guard & 8);
+                                const bool carry_value =
+                                    (carry == 7 || before.predicates[carry]) != invert_carry;
+                                const u32 addend = complement ? ~before.Read(source) : before.Read(source);
+                                const u32 expected = active ? addend + u32{carry_value} : before.Read(dest);
+                                machine.Run(lowered.instructions);
+                                REQUIRE(machine.Read(dest) == expected);
+                                CheckUnchanged(before, machine, dest, 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+TEST_CASE("Ampere unsigned wide IMAD reports full-sum carry after aliased guarded writes",
+          "[video_core][ampere][integer_multiply]") {
+    std::mt19937 random{0x225ca77};
+    constexpr std::array<std::array<u32, 4>, 8> boundaries{{
+        {0, 0, 0, 0}, {1, 1, ~0U, ~0U}, {~0U, ~0U, ~0U, ~0U},
+        {~0U, ~0U, 0, ~0U}, {~0U, ~0U, ~0U, 0},
+        {0x80000000U, 2, 0, ~0U}, {~0U, 1, 1, 0}, {1, 1, 0, 0},
+    }};
+    for (const u32 opcode : {0x225U, 0x625U, 0x825U}) {
+        for (u32 carry_output = 0; carry_output < 7; ++carry_output) {
+            for (const u32 dest : {0U, 2U, 4U, 6U}) {
+                for (const u32 guard : {0U, 1U, 6U, 7U, 8U, 9U, 14U}) {
+                    for (const bool initial_carry : {false, true}) {
+                        for (u32 test = 0; test < 12; ++test) {
+                            auto machine = SeedMachine();
+                            machine.carry = initial_carry;
+                            const auto values = test < boundaries.size() ? boundaries[test] :
+                                std::array<u32, 4>{static_cast<u32>(random()), static_cast<u32>(random()),
+                                                   static_cast<u32>(random()), static_cast<u32>(random())};
+                            machine.registers[2] = values[0];
+                            machine.registers[4] = values[1];
+                            machine.registers[6] = values[2];
+                            machine.registers[7] = values[3];
+                            machine.constants[2][4] = values[2];
+                            machine.constants[2][5] = values[3];
+                            const Instruction instruction{{
+                                opcode | (guard << 12) | (dest << 16) | (2U << 24),
+                                opcode == 0x225 ? 4U : opcode == 0x825 ? values[1] : (2U << 22) | (16U << 6),
+                                0x07800000U | (carry_output << 17) | (opcode == 0x625 ? 4U : 6U), 0}};
+                            const auto lowered = LowerToMaxwell(std::array{instruction, Exit});
+                            INFO(lowered.error);
+                            REQUIRE(lowered);
+                            const auto before = machine;
+                            const bool active = ((guard & 7) == 7 || before.predicates[guard & 7]) != bool(guard & 8);
+                            const unsigned __int128 sum =
+                                static_cast<unsigned __int128>(values[0]) * values[1] +
+                                values[2] + (static_cast<unsigned __int128>(values[3]) << 32);
+                            const u64 expected = active ? static_cast<u64>(sum) :
+                                before.Read(dest) | (u64{before.Read(dest + 1)} << 32);
+                            auto expected_state = before;
+                            if (active) expected_state.predicates[carry_output] = (sum >> 64) != 0;
+                            machine.Run(lowered.instructions);
+                            REQUIRE((machine.Read(dest) | (u64{machine.Read(dest + 1)} << 32)) == expected);
+                            CheckUnchanged(expected_state, machine, dest, 2);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Ampere wide carry output retains signed and register mode restrictions",
+          "[video_core][ampere][integer_multiply]") {
+    for (const u32 opcode : {0x225U, 0x625U, 0x825U}) {
+        const Instruction valid{{opcode | 0x02007000U,
+            opcode == 0x625 ? (2U << 22) | (16U << 6) : 4U,
+            0x07800000U | (opcode == 0x625 ? 4U : 6U), 0}};
+        REQUIRE(LowerToMaxwell(std::array{valid, Exit}));
+        auto invalid = valid;
+        invalid.words[2] |= 1U << 9; // Signed carry output remains unsupported.
+        REQUIRE_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
+        for (const u32 bit : {8U, 10U, 13U, 15U, 26U}) {
+            invalid = valid;
+            invalid.words[2] ^= 1U << bit;
+            REQUIRE_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
+        }
+        for (const u32 dest : {3U, 246U, 255U}) {
+            invalid = valid;
+            invalid.words[0] = (invalid.words[0] & ~0xff0000U) | (dest << 16);
+            REQUIRE_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
+        }
     }
 }

@@ -113,6 +113,11 @@ LINGER MakeLinger(bool enable, u32 linger_value) {
     return value;
 }
 
+/// SO_RCVTIMEO and SO_SNDTIMEO take milliseconds on Windows.
+DWORD MakeTimeout(u32 timeout_ms) {
+    return timeout_ms;
+}
+
 bool EnableNonBlock(SOCKET fd, bool enable) {
     u_long value = enable ? 1 : 0;
     return ioctlsocket(fd, FIONBIO, &value) != SOCKET_ERROR;
@@ -247,6 +252,14 @@ linger MakeLinger(bool enable, u32 linger_value) {
     linger value;
     value.l_onoff = enable ? 1 : 0;
     value.l_linger = linger_value;
+    return value;
+}
+
+/// SO_RCVTIMEO and SO_SNDTIMEO take a timeval elsewhere; a u32 is rejected with EINVAL.
+timeval MakeTimeout(u32 timeout_ms) {
+    timeval value{};
+    value.tv_sec = static_cast<decltype(value.tv_sec)>(timeout_ms / 1000);
+    value.tv_usec = static_cast<decltype(value.tv_usec)>((timeout_ms % 1000) * 1000);
     return value;
 }
 
@@ -1076,11 +1089,11 @@ Errno Socket::SetRcvBuf(u32 value) {
 }
 
 Errno Socket::SetSndTimeo(u32 value) {
-    return SetSockOpt(fd, SO_SNDTIMEO, value);
+    return SetSockOpt(fd, SO_SNDTIMEO, MakeTimeout(value));
 }
 
 Errno Socket::SetRcvTimeo(u32 value) {
-    return SetSockOpt(fd, SO_RCVTIMEO, value);
+    return SetSockOpt(fd, SO_RCVTIMEO, MakeTimeout(value));
 }
 
 Errno Socket::SetNonBlock(bool enable) {
