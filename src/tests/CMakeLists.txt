@@ -46,6 +46,7 @@ add_executable(tests
     video_core/storage_buffer_pointer_tracking.cpp
     video_core/storage_buffer_control_flow.cpp
     video_core/memory_tracker.cpp
+    video_core/buffer_cache_download.cpp
     video_core/unmapped_read_diagnostic.cpp
     video_core/memory_budget.cpp
     video_core/astc_recompression_override.cpp
@@ -94,6 +95,7 @@ add_executable(tests
     video_core/ampere_yoshi_surface.cpp
     video_core/ampere_yoshi_shift.cpp
     video_core/ampere_yoshi_uniform_shift.cpp
+    video_core/ampere_yoshi_cbuf_carry.cpp
     video_core/maxwell_shr.cpp
     video_core/ampere_release_guards.cpp
     video_core/ampere_release_f2i.cpp
