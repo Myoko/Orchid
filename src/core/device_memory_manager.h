@@ -12,14 +12,15 @@
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <vector>
+#include <source_location>
 #include <span>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/range_mutex.h"
 #include "common/scratch_buffer.h"
-#include "common/thread_worker.h"
 #include "common/sparse_large_vector.h"
+#include "common/thread_worker.h"
 
 namespace Core {
 
@@ -119,7 +120,8 @@ public:
     const u8* GetSpan(const DAddr src_addr, const std::size_t size) const;
 
     void ReadBlock(DAddr address, void* dest_pointer, size_t size);
-    void ReadBlockUnsafe(DAddr address, void* dest_pointer, size_t size);
+    void ReadBlockUnsafe(DAddr address, void* dest_pointer, size_t size,
+                         std::source_location caller = std::source_location::current());
     void WriteBlock(DAddr address, const void* src_pointer, size_t size);
     void WriteBlockUnsafe(DAddr address, const void* src_pointer, size_t size);
 

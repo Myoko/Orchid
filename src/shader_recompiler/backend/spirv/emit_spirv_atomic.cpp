@@ -248,6 +248,16 @@ Id EmitStorageAtomicExchange32(EmitContext& ctx, const IR::Value& binding, const
     return StorageAtomicU32(ctx, binding, offset, value, &Sirit::Module::OpAtomicExchange);
 }
 
+/// Stores value if the storage word equals comparator; returns the old word.
+Id EmitStorageAtomicCompareExchange32(EmitContext& ctx, const IR::Value& binding,
+                                    const IR::Value& offset, Id comparator, Id value) {
+    const Id pointer{StoragePointer(ctx, ctx.storage_types.U32, &StorageDefinitions::U32, binding,
+                                    offset, sizeof(u32))};
+    const auto [scope, semantics]{AtomicArgs(ctx)};
+    return ctx.OpAtomicCompareExchange(ctx.U32[1], pointer, scope, semantics, semantics, value,
+                                      comparator);
+}
+
 Id EmitStorageAtomicIAdd64(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
                            Id value) {
     return StorageAtomicU64(ctx, binding, offset, value, &Sirit::Module::OpAtomicIAdd,
@@ -463,6 +473,12 @@ Id EmitGlobalAtomicExchange32(EmitContext& ctx, Id address, Id value) {
     return GlobalAtomicU32(ctx, 8, address, value);
 }
 
+Id EmitGlobalAtomicCompareExchange32(EmitContext& ctx, Id address, Id comparator, Id value) {
+    if (!ctx.profile.support_int64) {
+        throw NotImplementedException("Global atomic address without Int64 support");
+    }
+    return ctx.OpFunctionCall(ctx.U32[1], ctx.atomic_cas_global_func_u32, address, comparator, value);
+}
 
 Id EmitGlobalAtomicInc32(EmitContext&) {
     throw NotImplementedException("SPIR-V Instruction {}", __func__);

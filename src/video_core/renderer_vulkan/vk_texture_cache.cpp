@@ -462,7 +462,8 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
 [[nodiscard]] vk::Image MakeImage(const Device& device, const MemoryAllocator& allocator,
                                   const ImageInfo& info, std::span<const VkFormat> view_formats,
                                   std::optional<VkFormat> format_override = {},
-                                  bool unbacked = false, bool aliased = false) {
+                                  bool unbacked = false, bool aliased = false,
+                                  ImageAllocationContext* context = nullptr) {
     if (info.type == ImageType::Buffer) {
         return vk::Image{};
     }
@@ -491,11 +492,12 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
         }
     }
     if (unbacked) {
-        if (vk::Image image = allocator.CreateUnbackedImage(image_ci, aliased)) {
+        if (vk::Image image = allocator.CreateUnbackedImage(
+                image_ci, aliased, context ? &context->initial_sparse : nullptr)) {
             return image;
         }
     }
-    return allocator.CreateImage(image_ci);
+    return allocator.CreateImage(image_ci, false, context);
 }
 
 [[nodiscard]] vk::ImageView MakeStorageView(const vk::Device& device, u32 level, VkImage image,
@@ -1249,7 +1251,10 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
     }
     for (size_t index_a = 0; index_a < VideoCore::Surface::MaxPixelFormat; index_a++) {
         const auto image_format = static_cast<PixelFormat>(index_a);
-        if (IsPixelFormatASTC(image_format) && !device.IsOptimalAstcSupported()) {
+        // The GPU decoder's RGBA8 view is compatible only with uncompressed host images.
+        // Recompressed ASTC uses BC1/BC3 images, which cannot have an RGBA8 view.
+        if (IsPixelFormatASTC(image_format) && !device.IsOptimalAstcSupported() &&
+            Settings::GetAstcRecompression() == Settings::AstcRecompression::Uncompressed) {
             view_formats[index_a].push_back(VK_FORMAT_A8B8G8R8_UNORM_PACK32);
         }
         for (size_t index_b = 0; index_b < VideoCore::Surface::MaxPixelFormat; index_b++) {
@@ -2563,19 +2568,30 @@ void TextureCacheRuntime::TickFrame() {
 namespace {
 
 // The host image of a texture; unbacked images are created without memory (see MakeImage).
+// Return the trimmed mip origin to the image so its views and uploads use the host's levels.
 [[nodiscard]] vk::Image MakeHostImage(TextureCacheRuntime& runtime, const ImageInfo& info,
-                                      u32 host_level_offset, GPUVAddr gpu_addr, bool backed) {
+                                      u32& host_level_offset, GPUVAddr gpu_addr, bool backed) {
     const Device& device = runtime.device;
     const bool sparse_tiles = !backed && UsesSparseTiles(device, info, gpu_addr);
+    const bool sparse_layers = !backed && UsesSparseLayers(device, info, gpu_addr);
+    const bool unwritten_sparse =
+        !backed && !sparse_layers && !sparse_tiles && IsUnwrittenSparse(device, info, gpu_addr);
+    const bool sparse_aliased =
+        sparse_tiles && SparseTilesModeOf(device) == SparseTilesMode::Aliased;
+    ImageAllocationContext context{gpu_addr, static_cast<u32>(info.format),
+                                   backed             ? "backed"
+                                   : sparse_layers    ? "layers"
+                                   : sparse_tiles     ? "tiles"
+                                   : unwritten_sparse ? "unwritten"
+                                                      : "none",
+                                   backed, sparse_aliased};
     return MakeImage(
         device, runtime.memory_allocator, TrimmedHostInfo(device, info, host_level_offset),
         IsHugeAstcArray(device, info)   ? std::span<const VkFormat>{HugeAstcViewFormats}
         : IsOpaqueBc1Astc(device, info) ? std::span<const VkFormat>{OpaqueAstcViewFormats}
                                         : runtime.ViewFormats(info.format),
-        AstcHostFormat(device, info),
-        !backed && (UsesSparseLayers(device, info, gpu_addr) || sparse_tiles ||
-                    IsUnwrittenSparse(device, info, gpu_addr)),
-        sparse_tiles && SparseTilesModeOf(device) == SparseTilesMode::Aliased);
+        AstcHostFormat(device, info), sparse_layers || sparse_tiles || unwritten_sparse,
+        sparse_aliased, &context);
 }
 
 } // Anonymous namespace

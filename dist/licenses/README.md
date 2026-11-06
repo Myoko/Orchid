@@ -26,6 +26,18 @@ Other platforms and system-library builds can use different library versions
 and configurations. FFmpeg's applicable license also depends on its enabled
 components, as described in `ffmpeg/LICENSE.md`.
 
+## Windows MinGW PGO FFmpeg
+
+The Windows PGO build uses the MSYS2 UCRT64 FFmpeg package, not the Takoroka
+package described above. The package is updated by MSYS2 and is not pinned by
+the build. For example, the 9.0.2-2 package is identified as GPL-3.0-or-later;
+its [source package](https://repo.msys2.org/mingw/sources/mingw-w64-ffmpeg-9.0.2-2.src.tar.zst)
+contains the recipe and patches. The [MSYS2 recipe](https://github.com/msys2/MINGW-packages/blob/master/mingw-w64-ffmpeg/PKGBUILD)
+includes `--enable-gpl`, `--enable-version3` and `--enable-libdav1d`. The
+shared FFmpeg libraries use a separate dav1d DLL. `ffmpeg/COPYING.GPLv3` is
+the GPL version 3 license text; consult the package recipe for its full
+configuration and other dependencies.
+
 ## Distribution requirements
 
 These files provide notices, not a complete compliance assessment or a written

@@ -15,6 +15,22 @@
 #include "common/logging.h"
 #include "common/assert.h"
 #include "common/thread.h"
+
+#ifndef _WIN32
+namespace {
+std::chrono::steady_clock::time_point EventDeadline(std::chrono::nanoseconds timeout) {
+    using namespace std::chrono;
+    const auto now = steady_clock::now();
+    if (timeout <= nanoseconds::zero()) {
+        return now;
+    }
+    const auto now_ns = duration_cast<nanoseconds>(now.time_since_epoch());
+    const auto deadline =
+        now_ns > nanoseconds::max() - timeout ? nanoseconds::max() : now_ns + timeout;
+    return steady_clock::time_point{duration_cast<steady_clock::duration>(deadline)};
+}
+} // namespace
+#endif
 #ifdef __APPLE__
 #include <mach/mach.h>
 #elif defined(__HAIKU__)
@@ -721,7 +737,7 @@ bool Event::WaitFor(const std::chrono::nanoseconds time) {
     }
 #else
     std::unique_lock lk{mutex};
-    if (!condvar.wait_for(lk, time, [this] { return is_set.load(); }))
+    if (!condvar.wait_until(lk, EventDeadline(time), [this] { return is_set.load(); }))
         return false;
     is_set = false;
     return true;
@@ -746,7 +762,7 @@ bool Event::WaitFor(const std::chrono::nanoseconds time) {
     return consume_signal();
 #else
     std::unique_lock lk{mutex};
-    if (!condvar.wait_for(lk, time, [this] { return is_set.load(); }))
+    if (!condvar.wait_until(lk, EventDeadline(time), [this] { return is_set.load(); }))
         return false;
     is_set = false;
     return true;

@@ -7,14 +7,15 @@
 #pragma once
 
 #include <algorithm>
-#include <cstdlib>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -95,6 +96,8 @@ struct Binding {
     GPUVAddr gpu_addr{};
     u32 size{};
     BufferId buffer_id;
+    // Nonzero when a virtual storage range needs a shorter physical fallback.
+    u32 physical_size{};
     u32 segment_first{};
     u32 segment_count{};
 };
@@ -286,7 +289,7 @@ public:
     void UnbindGraphicsStorageBuffers(size_t stage);
 
     bool BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
-                                   bool is_written);
+                                   bool is_written, u32 indirect_offset = ~0U);
 
     void UnbindGraphicsTextureBuffers(size_t stage);
 
@@ -296,7 +299,7 @@ public:
     void UnbindComputeStorageBuffers();
 
     void BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
-                                  bool is_written);
+                                  bool is_written, u32 indirect_offset = ~0U);
 
     void UnbindComputeTextureBuffers();
 
@@ -579,7 +582,8 @@ private:
 
     void RefreshMultiRangeSegments(std::vector<MultiRangeSegment>& pool);
 
-    bool SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size);
+    bool SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size,
+                           std::source_location caller = std::source_location::current());
     bool SynchronizeBufferPages(Buffer& buffer, DAddr device_addr, u32 size);
 
     void UploadMemory(Buffer& buffer, u64 total_size_bytes, u64 largest_copy,
@@ -600,7 +604,8 @@ private:
     void DeleteBuffer(BufferId buffer_id, bool do_not_mark = false);
 
     [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
-                                               bool is_written) const;
+                                               bool is_written, bool table_pointer = false,
+                                               bool native_compute = false) const;
 
     [[nodiscard]] TextureBufferBinding GetTextureBufferBinding(GPUVAddr gpu_addr, u32 size,
                                                                PixelFormat format);

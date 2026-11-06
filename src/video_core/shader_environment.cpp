@@ -50,6 +50,12 @@ static u64 MakeCbufKey(u32 index, u32 offset) {
     return (static_cast<u64>(index) << 32) | offset;
 }
 
+// Pointer-table entries share the classification map with plain constant buffer pointers.
+static u64 MakeIndirectCbufKey(u32 index, u32 offset, u32 indirect) {
+    return (u64{1} << 63) | (static_cast<u64>(indirect & 0x3fffff) << 40) |
+           MakeCbufKey(index, offset);
+}
+
 static Shader::TextureType ConvertTextureType(const Tegra::Texture::TICEntry& entry) {
     switch (entry.texture_type) {
     case Tegra::Texture::TextureType::Texture1D:
@@ -183,6 +189,42 @@ bool GenericEnvironment::HasNativeInstructions() const {
     return native_source_size || Shader::Ampere::HasNativeAddressMap(code);
 }
 
+bool GenericEnvironment::IsNativeProgram() const {
+    return native_source_size != 0 || Shader::Ampere::HasNativeAddressMap(code);
+}
+
+bool GenericEnvironment::IsCbufStorageBufferPointer(u32 index, u32 offset) {
+    const u64 key = MakeCbufKey(index, offset);
+    if (const auto it = storage_pointer_types.find(key); it != storage_pointer_types.end()) {
+        return it->second != 0;
+    }
+    const u64 address = u64{ReadCbufValue(index, offset)} |
+                        (u64{ReadCbufValue(index, offset + 4)} << 32);
+    const bool mapped = address != 0 && gpu_memory->IsWithinGPUAddressRange(address) &&
+                        gpu_memory->IsFullyMappedRange(address, 1);
+    storage_pointer_types.emplace(key, static_cast<u8>(mapped));
+    return mapped;
+}
+
+bool GenericEnvironment::IsCbufIndirectStorageBufferPointer(u32 index, u32 offset, u32 indirect) {
+    const u64 key = MakeIndirectCbufKey(index, offset, indirect);
+    if (const auto it = storage_pointer_types.find(key); it != storage_pointer_types.end()) {
+        return it->second != 0;
+    }
+    bool mapped = false;
+    if (IsCbufStorageBufferPointer(index, offset)) {
+        const u64 holder =
+            u64{ReadCbufValue(index, offset)} | (u64{ReadCbufValue(index, offset + 4)} << 32);
+        if (gpu_memory->IsFullyMappedRange(holder + indirect, sizeof(u64))) {
+            const u64 address = gpu_memory->Read<u64>(holder + indirect);
+            mapped = address != 0 && gpu_memory->IsWithinGPUAddressRange(address) &&
+                     gpu_memory->IsFullyMappedRange(address, 1);
+        }
+    }
+    storage_pointer_types.emplace(key, static_cast<u8>(mapped));
+    return mapped;
+}
+
 std::optional<u64> GenericEnvironment::Analyze() {
     if (native_source_size) {
         // Include the converted header and a version tag to isolate this experimental ABI.
@@ -243,6 +285,7 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
     const u64 num_texture_types{static_cast<u64>(texture_types.size())};
     const u64 num_texture_pixel_formats{static_cast<u64>(texture_pixel_formats.size())};
     const u64 num_cbuf_values{static_cast<u64>(cbuf_values.size())};
+    const u64 num_storage_pointer_types{static_cast<u64>(storage_pointer_types.size())};
     const u64 num_cbuf_replacement_values{static_cast<u64>(cbuf_replacements.size())};
 
     file.write(reinterpret_cast<const char*>(&code_size), sizeof(code_size))
@@ -250,6 +293,8 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
         .write(reinterpret_cast<const char*>(&num_texture_pixel_formats),
                sizeof(num_texture_pixel_formats))
         .write(reinterpret_cast<const char*>(&num_cbuf_values), sizeof(num_cbuf_values))
+        .write(reinterpret_cast<const char*>(&num_storage_pointer_types),
+               sizeof(num_storage_pointer_types))
         .write(reinterpret_cast<const char*>(&num_cbuf_replacement_values),
                sizeof(num_cbuf_replacement_values))
         .write(reinterpret_cast<const char*>(&local_memory_size), sizeof(local_memory_size))
@@ -271,6 +316,10 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
             .write(reinterpret_cast<const char*>(&format), sizeof(format));
     }
     for (const auto& [key, type] : cbuf_values) {
+        file.write(reinterpret_cast<const char*>(&key), sizeof(key))
+            .write(reinterpret_cast<const char*>(&type), sizeof(type));
+    }
+    for (const auto& [key, type] : storage_pointer_types) {
         file.write(reinterpret_cast<const char*>(&key), sizeof(key))
             .write(reinterpret_cast<const char*>(&type), sizeof(type));
     }
@@ -325,14 +374,8 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
 
 Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
                                                              bool via_header_index, u32 raw) {
-    const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
-    const u32 index{Tegra::Texture::TextureHeaderIndex(handle.first, tic_limit,
-                                                       gpu_memory->UsesNativeTiling())};
-    ASSERT(index <= tic_limit);
-    const GPUVAddr descriptor_addr{tic_addr + index * sizeof(Tegra::Texture::TICEntry)};
-    Tegra::Texture::TICEntry entry;
-    gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
-    return entry;
+    return Tegra::Texture::ReadTextureDescriptor(*gpu_memory, tic_addr, tic_limit, via_header_index,
+                                                 raw);
 }
 
 namespace {
@@ -970,12 +1013,15 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
     u64 num_texture_types{};
     u64 num_texture_pixel_formats{};
     u64 num_cbuf_values{};
+    u64 num_storage_pointer_types{};
     u64 num_cbuf_replacement_values{};
     file.read(reinterpret_cast<char*>(&code_size), sizeof(code_size))
         .read(reinterpret_cast<char*>(&num_texture_types), sizeof(num_texture_types))
         .read(reinterpret_cast<char*>(&num_texture_pixel_formats),
               sizeof(num_texture_pixel_formats))
         .read(reinterpret_cast<char*>(&num_cbuf_values), sizeof(num_cbuf_values))
+        .read(reinterpret_cast<char*>(&num_storage_pointer_types),
+              sizeof(num_storage_pointer_types))
         .read(reinterpret_cast<char*>(&num_cbuf_replacement_values),
               sizeof(num_cbuf_replacement_values))
         .read(reinterpret_cast<char*>(&local_memory_size), sizeof(local_memory_size))
@@ -1008,6 +1054,13 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
         file.read(reinterpret_cast<char*>(&key), sizeof(key))
             .read(reinterpret_cast<char*>(&value), sizeof(value));
         cbuf_values.emplace(key, value);
+    }
+    for (size_t i = 0; i < num_storage_pointer_types; ++i) {
+        u64 key;
+        u8 value;
+        file.read(reinterpret_cast<char*>(&key), sizeof(key))
+            .read(reinterpret_cast<char*>(&value), sizeof(value));
+        storage_pointer_types.emplace(key, value);
     }
     for (size_t i = 0; i < num_cbuf_replacement_values; ++i) {
         u64 key;
@@ -1044,6 +1097,26 @@ u32 FileEnvironment::TranslateProgramAddress(u32 address) const {
 
 bool FileEnvironment::HasNativeInstructions() const {
     return Shader::Ampere::HasNativeAddressMap(code);
+}
+
+bool FileEnvironment::IsNativeProgram() const {
+    return Shader::Ampere::HasNativeAddressMap(code);
+}
+
+bool FileEnvironment::IsCbufStorageBufferPointer(u32 index, u32 offset) {
+    const auto it = storage_pointer_types.find(MakeCbufKey(index, offset));
+    if (it == storage_pointer_types.end()) {
+        throw Shader::LogicError("Uncached storage pointer classification");
+    }
+    return it->second != 0;
+}
+
+bool FileEnvironment::IsCbufIndirectStorageBufferPointer(u32 index, u32 offset, u32 indirect) {
+    const auto it = storage_pointer_types.find(MakeIndirectCbufKey(index, offset, indirect));
+    if (it == storage_pointer_types.end()) {
+        throw Shader::LogicError("Uncached storage pointer table classification");
+    }
+    return it->second != 0;
 }
 
 u64 FileEnvironment::ReadInstruction(u32 address) {

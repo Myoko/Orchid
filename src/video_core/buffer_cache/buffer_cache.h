@@ -15,7 +15,9 @@
 #include <fmt/ranges.h>
 
 #include "common/range_sets.inc"
+#include "common/unmapped_read_diagnostic.h"
 #include "video_core/buffer_cache/buffer_cache_base.h"
+#include "video_core/buffer_cache/storage_buffer_size.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -538,7 +540,8 @@ void BufferCache<P>::UnbindGraphicsStorageBuffers(size_t stage) {
 
 template <class P>
 bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, u32 cbuf_index,
-                                               u32 cbuf_offset, bool is_written) {
+                                               u32 cbuf_offset, bool is_written,
+                                               u32 indirect_offset) {
     const bool already_enabled =
         ((channel_state->enabled_storage_buffers[stage] >> ssbo_index) & 1U) != 0;
     if constexpr (requires { runtime.ShouldLimitDynamicStorageBuffers(); }) {
@@ -561,9 +564,18 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
     }
 
     const auto& cbufs = maxwell3d->state.shader_stages[stage];
-    const GPUVAddr ssbo_addr = cbufs.const_buffers[cbuf_index].address + cbuf_offset;
+    GPUVAddr ssbo_addr = cbufs.const_buffers[cbuf_index].address + cbuf_offset;
+    if (indirect_offset != ~0U) {
+        // The pointer is an entry of a table the constant buffer points to.
+        const GPUVAddr holder = gpu_memory->Read<u64>(ssbo_addr);
+        if (holder == 0) {
+            channel_state->storage_buffers[stage][ssbo_index] = NULL_BINDING;
+            return false;
+        }
+        ssbo_addr = holder + indirect_offset;
+    }
     channel_state->storage_buffers[stage][ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written);
+        StorageBufferBinding(ssbo_addr, cbuf_index, is_written, indirect_offset != ~0U);
     return (channel_state->storage_buffers[stage][ssbo_index].buffer_id != NULL_BUFFER_ID);
 }
 
@@ -602,7 +614,7 @@ void BufferCache<P>::UnbindComputeStorageBuffers() {
 
 template <class P>
 void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
-                                              bool is_written) {
+                                              bool is_written, u32 indirect_offset) {
     if (ssbo_index >= channel_state->compute_storage_buffers.size()) [[unlikely]] {
         LOG_ERROR(HW_GPU, "Storage buffer index {} exceeds maximum storage buffer count",
                   ssbo_index);
@@ -637,9 +649,19 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
     ASSERT(((launch_desc.const_buffer_enable_mask >> cbuf_index) & 1) != 0);
 
     const auto& cbufs = launch_desc.const_buffer_config;
-    const GPUVAddr ssbo_addr = cbufs[cbuf_index].Address() + cbuf_offset;
+    GPUVAddr ssbo_addr = cbufs[cbuf_index].Address() + cbuf_offset;
+    if (indirect_offset != ~0U) {
+        // The pointer is an entry of a table the constant buffer points to.
+        const GPUVAddr holder = gpu_memory->Read<u64>(ssbo_addr);
+        if (holder == 0) {
+            channel_state->compute_storage_buffers[ssbo_index] = NULL_BINDING;
+            return;
+        }
+        ssbo_addr = holder + indirect_offset;
+    }
     channel_state->compute_storage_buffers[ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written);
+        StorageBufferBinding(ssbo_addr, cbuf_index, is_written, indirect_offset != ~0U,
+                             kepler_compute->IsNativeMode());
 }
 
 template <class P>
@@ -1321,13 +1343,18 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
             SynchronizeBuffer(buffer, segment.device_addr, segment.size);
             const u32 offset = buffer.Offset(segment.device_addr);
             buffer.MarkUsage(offset, segment.size);
-            if (is_written) {
-                MarkWrittenBuffer(segment.buffer_id, segment.device_addr, segment.size);
-            }
             runtime.PushMultiRangeSource(buffer, offset, segment.size);
         }
         runtime.InvalidateMultiRange(key);
-        return runtime.BindMultiRangeStorageBuffer(key, is_written);
+        if (!runtime.BindMultiRangeStorageBuffer(key, is_written)) {
+            return false;
+        }
+        if (is_written) {
+            for (const MultiRangeSegment& segment : segments) {
+                MarkWrittenBuffer(segment.buffer_id, segment.device_addr, segment.size);
+            }
+        }
+        return true;
     } else {
         return false;
     }
@@ -1504,15 +1531,18 @@ template <class P>
 void BufferCache<P>::BindHostComputeStorageBuffers() {
     u32 binding_index = 0;
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
-        const Binding& binding = channel_state->compute_storage_buffers[index];
+        Binding& binding = channel_state->compute_storage_buffers[index];
         const bool is_written =
             ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
         if (BindMultiRangeStorage(binding, is_written, compute_segments)) {
             return;
         }
+        const u32 size = binding.physical_size ? binding.physical_size : binding.size;
+        if (!binding.buffer_id && size != 0) {
+            binding.buffer_id = FindBuffer(binding.device_addr, size, false);
+        }
         Buffer& buffer = slot_buffers[binding.buffer_id];
         TouchBuffer(buffer, binding.buffer_id);
-        const u32 size = binding.size;
         SynchronizeBuffer(buffer, binding.device_addr, size);
 
         const u32 offset = buffer.Offset(binding.device_addr);
@@ -1837,7 +1867,8 @@ void BufferCache<P>::UpdateComputeStorageBuffers() {
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
         // Resolve buffer
         Binding& binding = channel_state->compute_storage_buffers[index];
-        binding.buffer_id = FindBuffer(binding.device_addr, binding.size, false);
+        const u32 physical_size = binding.physical_size ? binding.physical_size : binding.size;
+        binding.buffer_id = FindBuffer(binding.device_addr, physical_size, false);
         const bool is_written =
             ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
         ResolveMultiRangeStorage(binding, is_written, compute_segments);
@@ -2291,7 +2322,10 @@ void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
 }
 
 template <class P>
-bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size) {
+bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size,
+                                       std::source_location caller) {
+    Common::UnmappedReadDiagnostic::Scope trace;
+    trace.Sync(device_addr, size, caller);
     if (!Nx2DrawTuning() || size == 0) {
         return SynchronizeBufferPages(buffer, device_addr, size);
     }
@@ -2692,25 +2726,39 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
 
 template <class P>
 Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
-                                             bool is_written) const {
+                                             bool is_written, bool table_pointer,
+                                             bool native_compute) const {
     const GPUVAddr gpu_addr = gpu_memory->Read<u64>(ssbo_addr);
 
     if (gpu_addr == 0) {
         return NULL_BINDING;
     }
 
-    const auto size = [&]() {
-        const u32 memory_layout_size =
-            static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
-        const u64 next_qword = gpu_memory->Read<u64>(ssbo_addr + 8);
-        const u32 packed_size = static_cast<u32>(next_qword);
-        const bool next_qword_is_size = static_cast<u32>(next_qword >> 32) == 0 &&
-                                        packed_size != 0 &&
-                                        packed_size <= memory_layout_size;
-        if (next_qword_is_size) {
-            return packed_size;
+    const auto size = [&]() -> u32 {
+        const u64 layout_size = gpu_memory->GetMemoryLayoutSize(gpu_addr);
+        // Keep the existing NVN/graphics behaviour; bare pointers must be capped before
+        // conversion, since a kind range can be 4 GiB or larger.
+        const u64 memory_layout_size = table_pointer || native_compute
+                                           ? layout_size
+                                           : static_cast<u32>(layout_size);
+        // A pointer read from a table in memory is the base of an object pool, read anywhere in
+        // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
+        // its mapping, up to 64 MiB, and no further than one continuous range. The next qword is
+        // the next table entry, not a size. Written pools keep the 8 MiB cap: a write marks the
+        // whole binding GPU-modified.
+        // Native compute pointers are bare too; the next word is another shader parameter.
+        const u64 next_qword =
+            table_pointer || native_compute ? 0 : gpu_memory->Read<u64>(ssbo_addr + 8);
+        const u32 limit = StorageBufferSizeLimit(memory_layout_size, next_qword, table_pointer,
+                                                native_compute, is_written);
+        if (table_pointer && limit != 0) {
+            return static_cast<u32>(gpu_memory->MaxContinuousRange(gpu_addr, limit));
         }
-        return (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
+        if (native_compute && limit != 0) {
+            const auto ranges = gpu_memory->GetSubmappedRange(gpu_addr, limit);
+            return StorageBufferMappedPrefix(gpu_addr, limit, ranges);
+        }
+        return limit;
     }();
 
     // Alignment only applies to the offset of the buffer
@@ -2724,20 +2772,31 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         return NULL_BINDING;
     }
     const std::optional<DAddr> device_addr = gpu_memory->GpuToCpuAddress(gpu_addr);
-    ASSERT_MSG(device_addr, "Unaligned storage buffer address not found for cbuf index {}",
-               cbuf_index);
+    if (!device_addr) {
+        LOG_DEBUG(HW_GPU, "Unmapped storage buffer address for cbuf index {}", cbuf_index);
+        return NULL_BINDING;
+    }
     // The end address used for size calculation does not need to be aligned
     const DAddr cpu_end = Common::AlignUp(*device_addr + size, Core::DEVICE_PAGESIZE);
 
     u32 binding_size = static_cast<u32>(cpu_end - *aligned_device_addr);
-    if (is_written) {
+    if (is_written || (native_compute && !table_pointer)) {
         binding_size = aligned_size;
+    }
+    // Keep a safe fallback if multi-range storage cannot be used (including non-sparse writes).
+    // Starting from the aligned address also checks that the alignment prefix is contiguous.
+    const u32 physical_size = native_compute && !table_pointer
+        ? static_cast<u32>(gpu_memory->MaxContinuousRange(aligned_gpu_addr, binding_size))
+        : 0;
+    if (native_compute && !table_pointer && physical_size <= gpu_addr - aligned_gpu_addr) {
+        return NULL_BINDING;
     }
     const Binding binding{
         .device_addr = *aligned_device_addr,
         .gpu_addr = aligned_gpu_addr,
         .size = binding_size,
         .buffer_id = BufferId{},
+        .physical_size = physical_size,
     };
     return binding;
 }

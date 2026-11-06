@@ -206,8 +206,8 @@ MemoryAllocator::MemoryAllocator(const Device &device_)
 
 MemoryAllocator::~MemoryAllocator() = default;
 
-vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicated) const
-{
+vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo& ci, bool dedicated,
+                                       const ImageAllocationContext* context) const {
     const VmaAllocationCreateInfo alloc_ci = {
             // Best fit: images freed by the thousand leave holes in the blocks, which new ones
             // should fill before VMA takes another block.
@@ -236,6 +236,10 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicat
                       device.CanUseUnbackedSparseImages();
     VkResult result = huge ? VK_ERROR_OUT_OF_DEVICE_MEMORY
                            : vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+    const VkResult budget_result = result;
+    std::optional<VkResult> relaxed_result;
+    std::optional<VkResult> host_result;
+    SparseImageAttempt fallback_sparse;
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
         // Over the device memory budget (Switch 2 titles fill 8 GB cards): let the driver page
         // it out rather than failing the draw and aborting.
@@ -251,6 +255,7 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicat
         VmaAllocationCreateInfo relaxed = alloc_ci;
         relaxed.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
+        relaxed_result = result;
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
         // Still out of device memory: a real image in host memory (slow, but valid) beats one
@@ -260,6 +265,7 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicat
         host.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         host.preferredFlags = 0;
         result = vmaCreateImage(allocator, &ci, &host, &handle, &allocation, &alloc_info);
+        host_result = result;
         static u32 host_logged{};
         if (result == VK_SUCCESS && host_logged++ < 16) {
             LOG_WARNING(Render_Vulkan,
@@ -276,7 +282,7 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicat
         // Too big to back at all, e.g. title 1's sparse virtual texture arrays (8192x8192,
         // 68 layers, ~23 GB): on the console only resident tiles have memory. Use an image with
         // nothing bound, so views and copies still work, instead of aborting.
-        if (vk::Image sparse = CreateUnbackedImage(ci)) {
+        if (vk::Image sparse = CreateUnbackedImage(ci, false, &fallback_sparse)) {
             LOG_WARNING(Render_Vulkan,
                         "Image {}x{}x{} ({} levels, {} layers, format {}) does not fit; using an "
                         "unbacked sparse image",
@@ -286,6 +292,29 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicat
         }
     }
     if (result != VK_SUCCESS) {
+        if (context) {
+            LOG_ERROR(Render_Vulkan,
+                      "Failed guest image: gpu={:#x} format={} sparse_path={} backing_requested={} "
+                      "aliased={} "
+                      "initial_sparse={} vk_called={} vk_result={}",
+                      context->gpu_address, context->guest_format, context->sparse_path,
+                      context->backing_requested, context->sparse_aliased,
+                      context->initial_sparse.reason, context->initial_sparse.called,
+                      static_cast<int>(context->initial_sparse.result));
+        }
+        LOG_ERROR(Render_Vulkan,
+                  "Image allocation attempts: budget_called={} budget_result={} relaxed_called={} "
+                  "relaxed_result={} host_called={} host_result={} huge_skip={} sparse={} "
+                  "sparse_vk_called={} sparse_vk_result={} sparse_policy={} sparse_residency={} "
+                  "sparse_aliasing={} type={} flags={:#x} usage={:#x} samples={}",
+                  !huge, static_cast<int>(budget_result), relaxed_result.has_value(),
+                  static_cast<int>(relaxed_result.value_or(VK_SUCCESS)), host_result.has_value(),
+                  static_cast<int>(host_result.value_or(VK_SUCCESS)), huge, fallback_sparse.reason,
+                  fallback_sparse.called, static_cast<int>(fallback_sparse.result),
+                  device.CanUseUnbackedSparseImages(),
+                  device.IsSparseResidencyImageSupported(ci.imageType),
+                  device.IsSparseResidencyAliasedSupported(), static_cast<u32>(ci.imageType),
+                  ci.flags, ci.usage, static_cast<u32>(ci.samples));
         LOG_CRITICAL(Render_Vulkan, "Image {}x{}x{} ({} levels, {} layers, format {}) failed: {}",
                      ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
                      ci.arrayLayers, static_cast<u32>(ci.format), static_cast<int>(result));
@@ -306,10 +335,22 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicat
                         device.GetDispatchLoader());
 }
 
-vk::Image MemoryAllocator::CreateUnbackedImage(const VkImageCreateInfo &ci, bool aliased) const {
+vk::Image MemoryAllocator::CreateUnbackedImage(const VkImageCreateInfo& ci, bool aliased,
+                                               SparseImageAttempt* attempt) const {
     // Aliased images bind a shared zeroed block everywhere, so they never leave memory unbound.
-    if ((!aliased && !device.CanUseUnbackedSparseImages()) || ci.samples != VK_SAMPLE_COUNT_1_BIT ||
-        !device.IsSparseResidencyImageSupported(ci.imageType)) {
+    if (!aliased && !device.CanUseUnbackedSparseImages()) {
+        if (attempt)
+            attempt->reason = "unbacked policy";
+        return vk::Image{};
+    }
+    if (ci.samples != VK_SAMPLE_COUNT_1_BIT) {
+        if (attempt)
+            attempt->reason = "multisampled";
+        return vk::Image{};
+    }
+    if (!device.IsSparseResidencyImageSupported(ci.imageType)) {
+        if (attempt)
+            attempt->reason = "residency unsupported for image type";
         return vk::Image{};
     }
     VkImageCreateInfo sparse_ci = ci;
@@ -318,8 +359,14 @@ vk::Image MemoryAllocator::CreateUnbackedImage(const VkImageCreateInfo &ci, bool
         sparse_ci.flags |= VK_IMAGE_CREATE_SPARSE_ALIASED_BIT;
     }
     VkImage sparse{};
-    if (device.GetDispatchLoader().vkCreateImage(*device.GetLogical(), &sparse_ci, nullptr,
-                                                 &sparse) != VK_SUCCESS) {
+    const VkResult result = device.GetDispatchLoader().vkCreateImage(*device.GetLogical(),
+                                                                     &sparse_ci, nullptr, &sparse);
+    if (attempt) {
+        attempt->called = true;
+        attempt->result = result;
+        attempt->reason = result == VK_SUCCESS ? "created" : "vkCreateImage failed";
+    }
+    if (result != VK_SUCCESS) {
         return vk::Image{};
     }
     return vk::Image(sparse, ci.usage, *device.GetLogical(), allocator, VK_NULL_HANDLE,

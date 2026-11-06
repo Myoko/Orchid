@@ -67,7 +67,14 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
     };
     for (const auto& instruction : code) {
         const u32 op = instruction.Bits(0, 12);
-        uses_uniform_bank |= op == 0xd08 || op == 0xf66 || touches_uniform_bank(instruction);
+        // RED's uniform-address form must reserve the UR mirrors even when no other op uses URs.
+        const bool uniform_red = op == 0x98e && instruction.Bits(24, 8) == 255 &&
+                                 (instruction.words[2] & ~0x03800e3fU) == 0x0c10e100;
+        // Local loads/stores read URs but do not write them; keep this separate from the
+        // uniform-write provenance classification used by bindless textures below.
+        const bool uniform_local = (op == 0x983 || op == 0x987) && instruction.Bits(91, 1);
+        uses_uniform_bank |= op == 0xd08 || op == 0xf66 || touches_uniform_bank(instruction) ||
+                             uniform_red || uniform_local;
     }
     const auto address_of = [](u32 index) { return 0x50U + index * 8 + ((index + 1) / 3) * 8; };
     const auto fail = [&](u32 index, std::string_view reason) {
@@ -131,7 +138,8 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
         // instruction, see register_pressure.h) or rejected.
         bool requires_shadow = false;
         for (u32 bit : {16U, 24U, 32U, 64U}) {
-            if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0xf60 && opcode != 0xf6c && opcode != 0x988 && opcode != 0xf66 && opcode != 0x927) continue;
+            // Uniform-base STL, ISBEWR, RED and SURED also take data from bits 32-39, as RegisterPressure records.
+            if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0xf60 && opcode != 0xf6c && opcode != 0x988 && opcode != 0x987 && opcode != 0xf66 && opcode != 0x927 && opcode != 0x98e && opcode != 0x59f) continue;
             const u32 reg = insn.Bits(bit, 8);
             if (reg >= (uses_uniform_bank ? 216U : 246U) && reg < 255) requires_shadow = true;
             else if (reg < 255) highest_source = std::max(highest_source, reg);
@@ -937,7 +945,8 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
             if (target == ~0U || target == 255 || width > 5 ||
                 (opcode == 0xab9 && width < 4 && insn.Bits(38, 16) >= 0x8000) ||
                 (width == 5 && ((uniform_dest & 1) || uniform_register(uniform_dest + 1) != target + 1)) ||
-                bank() >= 18 || insn.Bits(38, 16) % align || insn.Bits(62, 2) ||
+                // Indexed loads align index + offset; the constant offset alone can be unaligned.
+                bank() >= 18 || (opcode == 0xab9 && insn.Bits(38, 16) % align) || insn.Bits(62, 2) ||
                 (insn.words[2] & ~0xe00U) != (opcode == 0xab9 ? 0U : 0x08000000U) ||
                 index_target == ~0U)
                 return fail(index, "native uniform constant load mode");
@@ -1357,6 +1366,15 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                               : opcode == 0xc19 ? uniform_register(insn.Bits(32, 8))
                                                 : insn.Bits(32, 8);
             const bool right = insn.Bits(76, 1) != 0, high_result = insn.Bits(80, 1) != 0;
+            // SHF.L.W.U32.HI Rd, RZ, c[bank][offset], Rc: the upper word of
+            // (Rc:0) << (count & 31) is Rc << (count & 31).
+            if (opcode == 0xa19 && !right && high_result && low == 255 && insn.Bits(73, 2) == 3 &&
+                insn.Bits(75, 1) && !insn.Bits(62, 2) && insn.Bits(54, 5) < 18 && valid_cbuf() &&
+                (insn.words[2] & ~0x000108ffU) == 0x00000600U && !(insn.words[3] & 0xc00001ffU)) {
+                emit(base(0x5c48000000000000ULL) | (u64{high} << 8) | (u64{shift} << 20) |
+                     (u64{1} << 39));
+                break;
+            }
             // SHF.R.U32 of the low word with a zero high word: a plain logical right shift.
             if (right && !high_result && high == 255 && insn.Bits(73, 2) == 3 && shift != ~0U &&
                 (opcode == 0xa19 || insn.words[1] <= 255) &&
@@ -1831,12 +1849,44 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                 return fail(index, "native fragment discard mode");
             emit(0xe33000000000000fULL | predicate);
             break;
-        case 0x243: // F2IP.U8.F32.NTZ Rd, RZ, Rb, RZ (Ocarina of Time's scene vertex shaders)
+        case 0x243: // F2IP.U8.F32.NTZ Rd, Ra, Rb, RZ (Ocarina of Time)
             // Converts B into byte 0 and A into byte 1, C[15:0] above them (PTX cvt.pack order, as
-            // F2FP's merge). With A and C RZ that is the byte F2I of Rb. Bit 74 is unverified, so
-            // only this exact mode word is taken (Lichii lowers it the same way).
-            if (insn.Bits(24, 8) != 255 || (insn.words[1] & ~0xffU) || insn.words[2] != 0x0000c4ffU)
-                return fail(index, "native packed float-to-byte mode");
+            // F2FP's merge). Keep the existing exact RZ, Rb, RZ truncating form below.
+            if (insn.Bits(24, 8) != 255 || (insn.words[1] & ~0xffU) ||
+                insn.words[2] != 0x0000c4ffU) {
+                // Two clamped bytes, nearest or truncate; retain the observed bit 74 and RZ C.
+                const u32 a = insn.Bits(24, 8), b = insn.Bits(32, 8);
+                const u32 rounding = insn.Bits(78, 2);
+                if ((insn.words[1] & ~0xffU) || (insn.words[2] & ~0xc000U) != 0x000004ffU ||
+                    (rounding != 0 && rounding != 3) || (a >= 246 && a != 255) ||
+                    (b >= 246 && b != 255) || dest >= 246 || (insn.words[3] & 0xc00001ffU))
+                    return fail(index, "native packed float-to-byte mode");
+                const auto to_byte = [&](u32 source, u32 out) {
+                    if (source == 255) {
+                        emit(0x5c98000000000000ULL | predicate | out | (u64{15} << 39) | (u64{255} << 20));
+                        return;
+                    }
+                    // Match the unsigned byte F2I path: NaN to zero, then clamp to [0, 255].
+                    emit(0x5800000000000000ULL | predicate | 250 | (u64{source} << 8) |
+                         (u64{source} << 20) | (u64{7} << 39) | (u64{7} << 48));
+                    emit(0x5c40000000000000ULL | predicate | 250 | (u64{source} << 8) |
+                         (u64{250} << 20) | (u64{7} << 48));
+                    mov_imm(252, 0U);
+                    emit(0x5c60000000000000ULL | predicate | 250 | (u64{250} << 8) |
+                         (u64{252} << 20) | (u64{15} << 39));
+                    mov_imm(252, 0x437f0000U);
+                    emit(0x5c60000000000000ULL | predicate | 250 | (u64{250} << 8) |
+                         (u64{252} << 20) | (u64{7} << 39));
+                    emit(0x5cb0000000000000ULL | predicate | out | (u64{2} << 8) | (u64{2} << 10) |
+                         (u64{250} << 20) | (u64{rounding} << 39));
+                };
+                to_byte(a, 248);
+                to_byte(b, 249);
+                // Convert both inputs before writing Rd, which may alias either one.
+                emit(base(0x5c18000000000000ULL) | (u64{248} << 8) | (u64{249} << 20) |
+                     (u64{8} << 39));
+                break;
+            }
             insn.words[0] &= 0x00ffffffU;
             insn.words[2] = 0x0020e000U; // byte F2I: unsigned, truncating
             opcode = 0x305;
@@ -2897,9 +2947,9 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
             // A uniform base (bit 91) is URb: STL.[URb+off] (0x987) takes it from bits 64-71, LDL.[URb+off]
             // (0x983) from bits 32-39.
             const bool store = opcode != 0x983;
-            const bool uniform_base = opcode == 0x987 || (opcode == 0x983 && insn.Bits(91, 1));
-            const u32 base_register = uniform_base ? uniform_register(insn.Bits(opcode == 0x987 ? 64 : 32, 8)) : 255U;
-            const u32 uniform_bits = opcode == 0x987 ? 0x080000ffU : (uniform_base ? 0x08000000U : 0U);
+            const bool uniform_base = opcode != 0x387 && insn.Bits(91, 1);
+            const u32 base_register = uniform_base ? uniform_register(insn.Bits(store ? 64 : 32, 8)) : 255U;
+            const u32 uniform_bits = uniform_base ? (store ? 0x080000ffU : 0x08000000U) : 0U;
             const u32 data = insn.Bits(32, 8), offset = insn.Bits(40, 24);
             const u32 type = insn.Bits(73, 3);
             // Types 0-3 (U8, S8, U16, S16) move one register's low byte or half, as on Maxwell.
@@ -2908,7 +2958,8 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
             const u32 mode = insn.words[2] & ~((7U << 9) | uniform_bits);
             u32 value = store ? data : static_cast<u32>(dest);
             if (components == 0 || (store && insn.Bits(16, 8)) ||
-                (uniform_base && base_register == ~0U) ||
+                (opcode == 0x987 && !uniform_base) ||
+                (uniform_base && (base_register == ~0U || (insn.words[3] & 0xc00001ffU))) ||
                 (!store && ((data && !uniform_base) || value == 255)) || (offset & (alignment - 1)) ||
                 offset > 0x7fffff ||
                 (value != 255 && ((value & (components - 1)) ||
@@ -2917,9 +2968,9 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                 return fail(index, "native local spill mode");
             u32 address = insn.Bits(24, 8);
             if (base_register != 255) {
-                // [Ra + URb + offset] (Kirby Air Riders' menu shaders): IADD the two.
-                emit(0x5c10000000000000ULL | predicate | 250 | (u64{address} << 8) | (u64{base_register} << 20));
-                address = 250;
+                // R248-R251 may hold a zero store vector; keep the combined address outside it.
+                emit(0x5c10000000000000ULL | predicate | 252 | (u64{address} << 8) | (u64{base_register} << 20));
+                address = 252;
             }
             if (value == 255) {
                 for (u32 word = 0; word < components; ++word) mov_imm(248 + word, 0);
@@ -3601,9 +3652,13 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                 break;
             }
             if (insn.Bits(74, 1) && !insn.Bits(72, 2)) {
-                // IADD3.X R, a, b, [-]c, P: a + b + c and the carry predicate of a previous add.
-                // Carry outputs and a second carry input are not lowered (a + b + c + P can carry twice).
-                if (insn.Bits(81, 3) != 7 || insn.Bits(84, 3) != 7 || insn.Bits(77, 4) != 15)
+                // With no carry outputs, both predicate inputs are ordinary 0/1 addends.
+                // Keep unverified uniform-predicate and modified two-carry forms rejected.
+                const bool second_carry = insn.Bits(77, 4) != 15;
+                if (insn.Bits(81, 3) != 7 || insn.Bits(84, 3) != 7 ||
+                    (second_carry && (rewritten_uniform ||
+                        (opcode != 0x210 && opcode != 0xc10) ||
+                        (insn.words[1] & ~0xffU) || insn.Bits(62, 2) || insn.Bits(75, 1))))
                     return fail(index, "native integer carry mode");
                 const u32 a = insn.Bits(24, 8), c = insn.Bits(64, 8);
                 const u32 b = opcode == 0x210 ? insn.Bits(32, 8) : operand(1, false);
@@ -3612,6 +3667,10 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                      (u64{insn.Bits(75, 1)} << 48));
                 carry_value(insn.Bits(87, 3), insn.Bits(90, 1));
                 emit(base(0x5c10000000000000ULL) | (u64{251} << 8) | (u64{253} << 20));
+                if (second_carry) {
+                    carry_value(insn.Bits(77, 3), insn.Bits(80, 1));
+                    emit(base(0x5c10000000000000ULL) | (dest << 8) | (u64{253} << 20));
+                }
                 break;
             }
             if (opcode == 0xa10 && insn.Bits(81, 3) != 7) {

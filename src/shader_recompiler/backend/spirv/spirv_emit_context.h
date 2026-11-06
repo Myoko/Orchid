@@ -372,6 +372,7 @@ public:
     // Global 32-bit atomics routed through the storage buffers, (address, value) -> old value.
     // Indexed like the operations table in DefineGlobalMemoryFunctions.
     std::array<Id, 9> atomic_global_func_u32{};
+    Id atomic_cas_global_func_u32{};
 
     bool need_input_position_indirect{};
     Id input_position{};

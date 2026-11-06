@@ -921,12 +921,19 @@ void Config::ReadSettingGeneric(Settings::BasicSetting* const setting) {
     }
 
     if (global || !use_global) {
+        const bool restore_custom = global && setting->Switchable() && !setting->UsingGlobal();
+        if (restore_custom) {
+            setting->SetGlobal(true);
+        }
         const bool is_default = ReadBooleanSetting(std::string(key).append("\\default"), std::make_optional(true));
         if (!is_default) {
             setting->LoadString(ReadStringSetting(key, default_value));
         } else {
             // Empty string resets the Setting to default
             setting->LoadString("");
+        }
+        if (restore_custom) {
+            setting->SetGlobal(false);
         }
     }
 }
@@ -1078,8 +1085,8 @@ void Config::SetArrayIndex(const int index) {
 
     const int array_index = index + 1;
 
-    // You can't exceed the known max size of the array by more than 1
-    ASSERT(array_stack.front().size + 1 >= array_index);
+    // You can't exceed the known max size of the innermost array by more than 1
+    ASSERT(array_stack.back().size + 1 >= array_index);
 
     // Change the config array size to the current index since you may want
     // to reduce the number of elements that you read back from the config

@@ -8,6 +8,7 @@ add_executable(tests
     common/bit_field.cpp
     common/cityhash.cpp
     common/container_hash.cpp
+    common/event.cpp
     common/fibers.cpp
     common/game_presets.cpp
     common/host_memory.cpp
@@ -24,8 +25,9 @@ add_executable(tests
     common/undefined_fix.cpp
     common/unique_function.cpp
     common/zstd_compression.cpp
-    core/core_timing.cpp
+    core/address_arbiter_read.cpp
     core/address_space.cpp
+    core/core_timing.cpp
     core/page_heap.cpp
     core/read_traps.cpp
     core/nx2_readback_cache.cpp
@@ -41,7 +43,10 @@ add_executable(tests
     core/internal_network/network.cpp
     video_core/aftermath_dump.cpp
     video_core/oot_visual_workaround.cpp
+    video_core/storage_buffer_pointer_tracking.cpp
+    video_core/storage_buffer_control_flow.cpp
     video_core/memory_tracker.cpp
+    video_core/unmapped_read_diagnostic.cpp
     video_core/memory_budget.cpp
     video_core/astc_recompression_override.cpp
     video_core/nx2_video_configuration.cpp
@@ -60,6 +65,7 @@ add_executable(tests
     video_core/h264_packet.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/vertex_repack.cpp
+    video_core/query_copy.cpp
     video_core/shader_reuse_environment.cpp
     video_core/ampere_lowering.cpp
     video_core/ampere_matrix.cpp
@@ -70,11 +76,13 @@ add_executable(tests
     video_core/compute_storage_buffers.cpp
     video_core/cooperative_matrix.cpp
     video_core/texture_depth_float.cpp
+    video_core/texture_descriptor_bounds.cpp
     video_core/texture_r2ur_handle.cpp
     video_core/ampere_kirby.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_geometry_lowering.cpp
     video_core/geometry_layer_viewport_relative.cpp
+    video_core/demote_nested_returns.cpp
     video_core/ampere_geometry_exit.cpp
     video_core/ampere_uniform_lea.cpp
     video_core/ampere_compute_forms.cpp
@@ -84,6 +92,7 @@ add_executable(tests
     video_core/ampere_bindless_tex.cpp
     video_core/ampere_sured.cpp
     video_core/ampere_yoshi_surface.cpp
+    video_core/ampere_yoshi_shift.cpp
     video_core/ampere_release_guards.cpp
     video_core/ampere_release_f2i.cpp
     video_core/ampere_uniform_immediate_shift.cpp

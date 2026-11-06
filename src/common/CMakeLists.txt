@@ -132,6 +132,7 @@ add_library(
     tiny_mt.h
     tree.h
     typed_address.h
+    unmapped_read_diagnostic.h
     uint128.h
     unique_function.h
     random.cpp

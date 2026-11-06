@@ -15,6 +15,7 @@
 
 #include "common/common_types.h"
 #include "common/div_ceil.h"
+#include "shader_recompiler/backend/nvn_storage_descriptor.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
@@ -1037,25 +1038,42 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
                                auto&& callback) {
         AddLabel();
         const size_t num_buffers{info.storage_buffers_descriptors.size()};
-        for (size_t index = 0; index < num_buffers; ++index) {
-            if (!info.nvn_buffer_used[index]) {
-                continue;
-            }
+        const u64 ssbo_align_mask{~(profile.min_ssbo_alignment - 1U)};
+        const auto base_address{[&](size_t index) {
             const auto& ssbo{info.storage_buffers_descriptors[index]};
             // The cbuf readers pick the declared uniform view, so this also works without
             // descriptor aliasing (only the U32x4 view exists there).
-            const Id addr_words{EmitGetCbufU32x2(*this, IR::Value{ssbo.cbuf_index},
-                                                 IR::Value{ssbo.cbuf_offset})};
-            const Id size_word{EmitGetCbufU32(*this, IR::Value{ssbo.cbuf_index},
-                                              IR::Value{ssbo.cbuf_offset + 8})};
-
-            const u64 ssbo_align_mask{~(profile.min_ssbo_alignment - 1U)};
-            const Id unaligned_addr{OpBitcast(U64, addr_words)};
-            const Id ssbo_addr{OpBitwiseAnd(U64, unaligned_addr, Constant(U64, ssbo_align_mask))};
-            const Id ssbo_size{OpUConvert(U64, size_word)};
-            const Id ssbo_end{OpIAdd(U64, ssbo_addr, ssbo_size)};
-            const Id cond{OpLogicalAnd(U1, OpUGreaterThanEqual(U1, addr, ssbo_addr),
-                                       OpULessThan(U1, addr, ssbo_end))};
+            const Id words{EmitGetCbufU32x2(*this, IR::Value{ssbo.cbuf_index},
+                                           IR::Value{ssbo.cbuf_offset})};
+            if (ssbo.indirect_offset == ~0U) {
+                return OpBitwiseAnd(U64, OpBitcast(U64, words), Constant(U64, ssbo_align_mask));
+            }
+            // The pointer is read through the buffer bound for the constant buffer pointer.
+            const auto holder{std::ranges::find_if(
+                info.storage_buffers_descriptors, [&ssbo](const auto& desc) {
+                    return desc.cbuf_index == ssbo.cbuf_index &&
+                           desc.cbuf_offset == ssbo.cbuf_offset && desc.indirect_offset == ~0U;
+                })};
+            if (holder == info.storage_buffers_descriptors.end()) {
+                return Constant(U64, ~u64{0});
+            }
+            const size_t holder_index{static_cast<size_t>(
+                std::distance(info.storage_buffers_descriptors.begin(), holder))};
+            const Id holder_low{OpCompositeExtract(U32[1], words, 0U)};
+            const Id byte{OpIAdd(U32[1],
+                                 OpBitwiseAnd(U32[1], holder_low,
+                                              Const(static_cast<u32>(profile.min_ssbo_alignment - 1))),
+                                 Const(ssbo.indirect_offset))};
+            const Id word_index{OpShiftRightLogical(U32[1], byte, Const(2U))};
+            const Id storage{ssbos[holder_index].U32};
+            const auto load_word{[&](Id word) {
+                return OpLoad(U32[1], OpAccessChain(storage_types.U32.element, storage, zero, word));
+            }};
+            const Id pointer_words{OpCompositeConstruct(
+                U32[2], load_word(word_index), load_word(OpIAdd(U32[1], word_index, Const(1U))))};
+            return OpBitwiseAnd(U64, OpBitcast(U64, pointer_words), Constant(U64, ssbo_align_mask));
+        }};
+        const auto access{[&](size_t index, Id ssbo_addr, Id cond) {
             const Id then_label{OpLabel()};
             const Id else_label{OpLabel()};
             OpSelectionMerge(else_label, spv::SelectionControlMask::MaskNone);
@@ -1067,6 +1085,52 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
             const Id ssbo_pointer{OpAccessChain(element_pointer, ssbo_id, zero, ssbo_index)};
             callback(ssbo_pointer);
             AddLabel(else_label);
+        }};
+        if (info.native_global_bounds) {
+            // Native pointers carry no NVN size word. The address belongs to the candidate buffer
+            // whose base is the closest one at or below it (bounds come from the binding).
+            std::vector<Id> bases(num_buffers);
+            Id best_index{Const(~0U)};
+            Id best_distance{Constant(U64, ~u64{0})};
+            for (size_t index = 0; index < num_buffers; ++index) {
+                bases[index] = base_address(index);
+                const Id distance{OpISub(U64, addr, bases[index])};
+                const Id better{OpLogicalAnd(U1, OpUGreaterThanEqual(U1, addr, bases[index]),
+                                             OpULessThan(U1, distance, best_distance))};
+                best_distance = OpSelect(U64, better, distance, best_distance);
+                best_index = OpSelect(U32[1], better, Const(static_cast<u32>(index)), best_index);
+            }
+            for (size_t index = 0; index < num_buffers; ++index) {
+                // Descriptor bounds are authoritative, including physical-prefix fallbacks.
+                // Check the whole access in 64 bits before access() narrows the byte offset.
+                const Id distance{OpISub(U64, addr, bases[index])};
+                const Id elements{OpArrayLength(U32[1], ssbos[index].*ssbo_member, 0U)};
+                const Id bytes{OpShiftLeftLogical(U64, OpUConvert(U64, elements), Const(shift))};
+                const Id fits{OpLogicalAnd(
+                    U1, OpULessThanEqual(U1, distance, bytes),
+                    OpUGreaterThanEqual(U1, OpISub(U64, bytes, distance),
+                                       Constant(U64, u64{1} << shift)))};
+                const Id representable{OpULessThanEqual(
+                    U1, distance, Constant(U64, (u64{1} << 32) - (u64{1} << shift)))};
+                const Id selected{OpIEqual(U1, best_index, Const(static_cast<u32>(index)))};
+                access(index, bases[index],
+                       OpLogicalAnd(U1, selected, OpLogicalAnd(U1, fits, representable)));
+            }
+            return;
+        }
+        for (size_t index = 0; index < num_buffers; ++index) {
+            if (!UsesNvnStorageDescriptor(info, info.storage_buffers_descriptors[index])) {
+                continue;
+            }
+            const auto& ssbo{info.storage_buffers_descriptors[index]};
+            const Id ssbo_addr{base_address(index)};
+            const Id size{EmitGetCbufU32(*this, IR::Value{ssbo.cbuf_index},
+                                       IR::Value{ssbo.cbuf_offset + 8})};
+            const Id ssbo_size{OpUConvert(U64, size)};
+            const Id ssbo_end{OpIAdd(U64, ssbo_addr, ssbo_size)};
+            const Id cond{OpLogicalAnd(U1, OpUGreaterThanEqual(U1, addr, ssbo_addr),
+                                       OpULessThan(U1, addr, ssbo_end))};
+            access(index, ssbo_addr, cond);
         }
     }};
     const auto define_load{[&](DefPtr ssbo_member, Id element_pointer, Id type, u32 shift) {
@@ -1164,6 +1228,27 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
                         const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
                         OpReturnValue((this->*operation)(U32[1], pointer, scope, zero, value));
                     });
+        OpReturnValue(zero);
+        OpFunctionEnd();
+    }
+    if (std::ranges::any_of(program.blocks, [](const IR::Block* block) {
+            return std::ranges::any_of(block->Instructions(), [](const IR::Inst& inst) {
+                return inst.GetOpcode() == IR::Opcode::GlobalAtomicCompareExchange32;
+            });
+        })) {
+        const Id function_type{TypeFunction(U32[1], U64, U32[1], U32[1])};
+        atomic_cas_global_func_u32 =
+            OpFunction(U32[1], spv::FunctionControlMask::MaskNone, function_type);
+        const Id address{OpFunctionParameter(U64)};
+        const Id comparator{OpFunctionParameter(U32[1])};
+        const Id value{OpFunctionParameter(U32[1])};
+        const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
+        define_body(&StorageDefinitions::U32, address, storage_types.U32.element, 2,
+                    [&](Id pointer) {
+                        OpReturnValue(OpAtomicCompareExchange(U32[1], pointer, scope, zero, zero,
+                                                              value, comparator));
+                    });
+        // Match the existing global atomic fallback when no buffer holds the address.
         OpReturnValue(zero);
         OpFunctionEnd();
     }

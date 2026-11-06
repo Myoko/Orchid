@@ -71,7 +71,7 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
-constexpr u32 CACHE_VERSION = 27;
+constexpr u32 CACHE_VERSION = 29;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
@@ -1478,6 +1478,8 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
                                                 !relative_layer_geometry);
         }
         Shader::Profile stage_profile{profile};
+        stage_profile.has_broken_spirv_dynamic_subgroup_shuffle =
+            device.NeedsGraphicsSubgroupShuffleWorkaround(MaxwellToVK::ShaderStage(program.stage));
         if (relative_layer_geometry) {
             // Translated as on hosts without the NV extensions (StageHostInfo), emitted the same.
             stage_profile.support_viewport_mask = false;

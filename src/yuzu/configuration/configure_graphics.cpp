@@ -226,9 +226,6 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
             continue;
         }
 #endif
-        if (setting->Id() == Settings::values.frame_gen.Id()) {
-            continue;
-        }
 
         ConfigurationShared::Widget* widget = [&]() {
             if (setting->Id() == Settings::values.fsr_sharpening_slider.Id()) {
