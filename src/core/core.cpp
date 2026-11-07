@@ -13,6 +13,7 @@
 #include "common/fs/fs.h"
 #include "common/logging.h"
 #include "common/adpf.h"
+#include "common/game_fps.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "common/string_util.h"
@@ -28,6 +29,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/nup_container.h"
+#include "core/loader/loose_directory.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/program_metadata.h"
 #include "core/file_sys/registered_cache.h"
@@ -111,6 +113,9 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
     }
 
     if (Common::FS::IsDir(path)) {
+        if (const auto main = Loader::ResolveLooseProgramPath(std::filesystem::path{Common::FS::ToU8String(path)})) {
+            return vfs->OpenFile(Common::FS::PathToUTF8String(*main), FileSys::OpenMode::Read);
+        }
         return vfs->OpenFile(path + "/main", FileSys::OpenMode::Read);
     }
 
@@ -352,6 +357,8 @@ struct System::Impl {
     }
 
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
+        Settings::wonder_fps_active.store(0, std::memory_order_relaxed);
+        Settings::wonder_dynamic_fps_active.store(false, std::memory_order_relaxed);
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }
@@ -418,6 +425,7 @@ struct System::Impl {
             LOG_ERROR(Core, "Failed to read title for ROM!");
         }
 
+        Common::Log::SetGameLog(params.program_id, name == "Unknown program" ? "" : name);
         LOG_INFO(Core, "Loading {} ({:016X}) ...", name, params.program_id);
 
         // Expose program id to dump sites and other global readers.

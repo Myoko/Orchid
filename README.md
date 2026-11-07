@@ -97,8 +97,8 @@ Compared with the Eglantine it started from:
 | Donkey Kong Bananza | 30, 15-25 in heavy areas | 30 in lighter areas |
 | Mario Kart World | 30-40 | lots of off-track asset glitches |
 | Mario Tennis Fever | 60 | runs flawlessly |
-| Yoshi and the Mysterious Book | | gameplay renders a black screen |
-| Super Mario Bros. Wonder | 60 | runs flawlessly |
+| Yoshi and the Mysterious Book | | first level renders correctly and movement tested; full game not validated |
+| Super Mario Bros. Wonder | 60 target | custom FPS targets; Overworld cache churn reduced, some dips remain |
 | Star Fox | 30 | crashes very quickly |
 | Splatoon Raiders | 30 | in gameplay |
 | Pokémon Pokopia | 60 | in gameplay |
@@ -128,6 +128,9 @@ Linux: `chmod +x` the AppImage and run it; it needs glibc 2.39 or newer. Windows
 and run `orchid.exe`.
 
 ## Build the newest commit yourself
+
+For repeated local Linux testing, use the [faster development build](docs/Build.md#faster-local-linux-test-builds)
+with `./tools/build-local.sh` after installing the dependencies and `ccache`.
 
 Linux. Install the dependencies once:
 

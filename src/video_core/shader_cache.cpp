@@ -28,6 +28,7 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/memory_manager.h"
+#include "video_core/native_shader_hitch_trace.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_environment.h"
 #include "video_core/texture_cache/util.h"
@@ -54,6 +55,19 @@ void ShaderCache::InvalidateRegions(std::span<const std::pair<DAddr, size_t>> se
 void ShaderCache::OnCacheInvalidation(VAddr addr, size_t size) {
     std::scoped_lock lock{invalidation_mutex};
     InvalidatePagesInRegion(addr, size);
+}
+
+std::vector<std::pair<DAddr, size_t>> ShaderCache::GetShaderCodeRanges() {
+    std::scoped_lock lock{invalidation_mutex, lookup_mutex, rejected_mutex};
+    std::vector<std::pair<DAddr, size_t>> ranges;
+    ranges.reserve(lookup_cache.size() + rejected_native.size());
+    for (const auto& [addr, entry] : lookup_cache) {
+        ranges.emplace_back(addr, entry->addr_end - entry->addr_start);
+    }
+    for (const auto& [addr, rejection] : rejected_native) {
+        ranges.emplace_back(addr, rejection.bytes.size());
+    }
+    return ranges;
 }
 
 void ShaderCache::SyncGuestHost() {
@@ -84,8 +98,20 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
     ReclaimInvalidatedShaders();
     auto& dirty{maxwell3d->dirty.flags};
     if (!dirty[VideoCommon::Dirty::Shaders]) {
-        return last_shaders_valid;
+        if (last_shaders_valid) {
+            return true;
+        }
+        // A native program may have been bound before its upload completed. Failed
+        // programs are not write tracked, so no register dirtiness need follow the upload.
+        // Allow the existing byte-change check to recover without another shader bind.
+        if (std::chrono::steady_clock::now() < next_failed_stage_retry) {
+            return false;
+        }
     }
+    next_failed_stage_retry = std::chrono::steady_clock::now() + std::chrono::milliseconds{250};
+    NativeShaderHitchTrace::SlowScope refresh_hitch{
+        "refresh-stages", 0, ~0U,
+        Common::HitchDiagnostic::Enabled() && maxwell3d->GetNativeMacroEngine().native_turing};
     dirty[VideoCommon::Dirty::Shaders] = false;
 
     const GPUVAddr base_addr{maxwell3d->regs.program_region.Address()};
@@ -134,7 +160,12 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
                 RethrowIfRejected(*cpu_shader_addr);
                 GraphicsEnvironment env{*maxwell3d, *gpu_memory, program, native ? shader_addr : base_addr,
                                        start_address, {}, support_cooperative_matrix};
+                NativeShaderHitchTrace::SlowScope info_hitch{
+                    "shader-info", shader_addr, static_cast<u32>(env.ShaderStage()),
+                    Common::HitchDiagnostic::Enabled() && native};
+                info_hitch.SourceBytes(env.SourceSizeBytes());
                 shader_info = MakeShaderInfo(env, *cpu_shader_addr);
+                info_hitch.Finish("ok");
             } catch (const Shader::Exception&) {
                 RememberRejection(*cpu_shader_addr, shader_addr);
                 // Once per program: which stage slot it is bound to, its header and the slot's
@@ -207,7 +238,13 @@ const ShaderInfo* ShaderCache::ComputeShader() {
         RethrowIfRejected(*cpu_shader_addr);
         ComputeEnvironment env{*kepler_compute, *gpu_memory, program_base, qmd.program_start,
                                {}, support_cooperative_matrix};
-        return MakeShaderInfo(env, *cpu_shader_addr);
+        NativeShaderHitchTrace::SlowScope info_hitch{
+            "shader-info", shader_addr, static_cast<u32>(env.ShaderStage()),
+            Common::HitchDiagnostic::Enabled() && kepler_compute->IsNativeMode()};
+        info_hitch.SourceBytes(env.SourceSizeBytes());
+        const auto* result = MakeShaderInfo(env, *cpu_shader_addr);
+        info_hitch.Finish("ok");
+        return result;
     } catch (const Shader::Exception&) {
         RememberRejection(*cpu_shader_addr, shader_addr);
         throw;
@@ -245,7 +282,10 @@ static std::vector<u8> ReadRejectedWindow(Tegra::MemoryManager& gpu_memory, GPUV
         length /= 2;
     }
     std::vector<u8> bytes(length);
-    gpu_memory.ReadBlockUnsafe(addr, bytes.data(), length);
+    // Rejected programs may be uploaded by the guest GPU after their first bind. Read the
+    // coherent bytes just as NativeInstructionReader does, otherwise the retry only compares
+    // stale CPU memory and never notices that the GPU completed the upload.
+    gpu_memory.ReadBlock(addr, bytes.data(), length);
     return bytes;
 }
 

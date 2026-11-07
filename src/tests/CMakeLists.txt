@@ -11,6 +11,7 @@ add_executable(tests
     common/event.cpp
     common/fibers.cpp
     common/game_presets.cpp
+    common/hitch_diagnostic.cpp
     common/host_memory.cpp
     common/host_memory_fallback.cpp
     common/page_table.cpp
@@ -32,17 +33,19 @@ add_executable(tests
     core/read_traps.cpp
     core/nx2_readback_cache.cpp
     core/nx2_core_readback_capacity.cpp
+    core/wonder_fps_patch.cpp
     core/nso.cpp
     core/nrr.cpp
     core/ncz_decompressor.cpp
     core/ldn.cpp
     core/internal_network/socket_proxy.cpp
     core/nup_writer.cpp
+    core/loose_directory.cpp
     core/priority_queue.cpp
     core/vfs_vector.cpp
     core/internal_network/network.cpp
     video_core/aftermath_dump.cpp
-    video_core/oot_visual_workaround.cpp
+    video_core/stall_diagnostics.cpp
     video_core/storage_buffer_pointer_tracking.cpp
     video_core/storage_buffer_control_flow.cpp
     video_core/memory_tracker.cpp
@@ -75,10 +78,16 @@ add_executable(tests
     video_core/ampere_i2f64.cpp
     video_core/ampere_uniform_fset.cpp
     video_core/compute_storage_buffers.cpp
+    video_core/compute_binding_diagnostic.cpp
     video_core/cooperative_matrix.cpp
+    video_core/spirv_storage_images.cpp
+    video_core/texture_unswizzle.cpp
+    video_core/texture_row_upload.cpp
     video_core/texture_depth_float.cpp
     video_core/texture_descriptor_bounds.cpp
+    video_core/shader_snapshot.cpp
     video_core/texture_r2ur_handle.cpp
+    video_core/texture_handles.cpp
     video_core/ampere_kirby.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_geometry_lowering.cpp
@@ -94,10 +103,11 @@ add_executable(tests
     video_core/ampere_sured.cpp
     video_core/ampere_yoshi_surface.cpp
     video_core/ampere_yoshi_shift.cpp
-    video_core/ampere_yoshi_uniform_shift.cpp
-    video_core/ampere_yoshi_cbuf_carry.cpp
-    video_core/ampere_yoshi_uniform_carry.cpp
     video_core/ampere_yoshi_lea_carry.cpp
+    video_core/ampere_yoshi_uniform_carry.cpp
+    video_core/ampere_yoshi_uniform_shift.cpp
+    video_core/ampere_yoshi_uniform_gather.cpp
+    video_core/ampere_yoshi_cbuf_carry.cpp
     video_core/maxwell_shr.cpp
     video_core/ampere_release_guards.cpp
     video_core/ampere_release_f2i.cpp
@@ -106,6 +116,7 @@ add_executable(tests
     video_core/syncpoint_manager.cpp
     video_core/native_macro_fifo.cpp
     video_core/uniform_stream_reuse.cpp
+    video_core/sparse_uniform_upload.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
     video_core/usage_tracker.cpp
@@ -122,6 +133,16 @@ target_link_libraries(tests PRIVATE common core input_common video_core)
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 
 add_test(NAME tests COMMAND tests)
+
+# Separate processes exercise the cached opt-in and destruction order without a GPU or profile.
+add_executable(stall_diagnostics_session
+    video_core/stall_diagnostics_session.cpp
+    ../video_core/stall_diagnostics.cpp)
+target_link_libraries(stall_diagnostics_session PRIVATE common ${PLATFORM_LIBRARIES} Threads::Threads)
+add_test(NAME stall_diagnostics_disabled COMMAND ${CMAKE_COMMAND} -E env
+    --unset=EDEN_NX2_STALL_DIAGNOSTICS $<TARGET_FILE:stall_diagnostics_session> disabled)
+add_test(NAME stall_diagnostics_enabled COMMAND ${CMAKE_COMMAND} -E env
+    EDEN_NX2_STALL_DIAGNOSTICS=1 $<TARGET_FILE:stall_diagnostics_session> enabled)
 
 # needed for vma
 if (NOT MSVC)

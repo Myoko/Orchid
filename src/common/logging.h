@@ -7,6 +7,7 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <algorithm>
 #include <type_traits>
 #include <fmt/ranges.h>
@@ -131,10 +132,17 @@ struct Filter {
 /// Initializes the logging system. This should be the first thing called in main.
 void Initialize();
 
+/// Begin the latest log for this game, replacing its previous session.
+void SetGameLog(u64 program_id, std::string_view title);
+std::filesystem::path GetLogFilePath();
+
 void Start();
 
 /// Explicitly stops the logger thread and flushes the buffers
 void Stop();
+
+/// Flush existing backends without changing the log filter or per-line flushing setting.
+void Flush();
 
 /// The global filter will prevent any messages from even being processed if they are filtered.
 void SetGlobalFilter(const Filter& filter);

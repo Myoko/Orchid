@@ -1,57 +1,26 @@
 > [!IMPORTANT]
-> ## Report crashes from inside Orchid
-> If a game crashes, start Orchid again and pick **Help > Report a Crash on GitHub**. It opens a bug report with your build, system, GPU and driver and the end of the crash log already filled in, and opens the log folder so you can attach the full log of the crashed run. Please use it for every crash: reports with a log get fixed much faster, and reports without one are closed.
+> ## Report issues from inside Orchid
+> Use **Help > Report an Issue on GitHub** to open a report with your build, system, GPU, driver and recent game log. After a crash, restart Orchid first and attach the full game log from the folder it opens.
 
-## What's new in 0.7.5
+## 0.9.0 — Yoshi gameplay works, shader fixes and smoother Wonder Overworld
 
-0.7.5 adds shader and buffer safety corrections, more native instruction support, and AV1
-decoding to the Windows PGO package. The fixes ported from Eglantine and its forks retain their
-source credits in the commits.
+### Yoshi and the Mysterious Book now works in tested gameplay
 
-### Graphics and shader stability
+The severe horizontal stripes are fixed: **the first level now renders correctly, Yoshi and the scene are visible, and movement was tested without the previous corruption**. The fix corrects Ampere `IMAD.HI` arithmetic to include the complete 64-bit addend and its low-word carry. Shader corrections also cover packed 16-bit surface writes, storage-image integer types, matrix operations, and shader-code/cache synchronization.
 
-- Shader metadata invalidated by the CPU stays alive until renderer bindings have been cleared,
-  avoiding stale ShaderInfo pointers during shader refresh.
-- Live texture descriptor reads are checked against the pool bounds before guest memory is read.
-- Native compute buffers use their mapped extent, including supported fragmented mappings,
-  rather than treating a neighbouring shader parameter as a buffer size.
-- Routed native loads, stores and atomics check the complete descriptor range before narrowing
-  their offsets to 32 bits.
-- Native 32-bit compare-and-swap atomics and additional carry, shift and reduction instruction
-  forms are supported. High data registers and uniform reduction addresses are preserved.
-- Signed-add overflow handling and AMD demote reordering around nested returns are corrected.
-- Texture uploads can be deferred when a render-target clear will overwrite them; scissor
-  checks preserve uploads needed outside the cleared area.
+A cold game run reached the first level and confirmed movement, with no device loss, compute-shader rejection or upscale fallback in that run. Docked output was 1920×1080, compared with 1280×720 in handheld mode. This is a first-level gameplay validation, **not a full-game completion or compatibility guarantee**. Some initial graphics-code-read warnings remain; other scenes, hardware and drivers may still have issues.
 
-### Windows video decoding
+The Vulkan pipeline-cache revision changes automatically so old compiled shaders are rebuilt after updating.
 
-- The Windows PGO build now ships FFmpeg with an AV1 decoder. CI checks that the decoder opens
-  and includes its runtime DLL dependencies. This addresses the missing-decoder error reported
-  with Ocarina of Time videos in issue #28.
+### Other fixes included
 
-### System and interface
+- **Super Mario Bros. Wonder:** prevents simultaneously sampled render-target copies from overwriting each other. Its native Switch 2 Edition can now use the available driver memory budget, with existing safety margins, to reduce Overworld texture eviction/re-upload churn. The paired test improved frame pacing; budget pressure and other causes can still produce dips.
+- **Wonder FPS and timing:** retains the custom 1–1000 FPS selector and adds more precise optional speed auditing. The experimental wall-time simulation mode remains opt-in through `EDEN_WONDER_DYNAMIC_FPS=1`; it is not enabled by default.
+- **Kirby / dynamic textures:** corrects computed texture handles, descriptor-array limits and shader-cache revisions.
+- **Vulkan:** batches command-list copy barriers and corrects viewport/scissor scaling in the viewport-transform-disabled path. The latter is not yet confirmed to resolve the reported Hyrule Warriors blur.
+- **Interface and logs:** shows emulation speed with multicore enabled, warns before launching games outside the supported scope, uses Orchid's GitHub links and issue-report wording, and retains each game's latest log.
+- **Development and release builds:** adds the local incremental-build helper and improves compiler-cache handling and build-time reporting.
 
-- Long event-wait deadlines saturate instead of overflowing on non-Windows hosts.
-- Stored callbacks own their callable objects, avoiding dangling references to the source.
-- The Ocarina of Time 30 FPS preset states that its built-in patch supports specific game builds.
+### Validation
 
-### Confirmed from 0.7.4
-
-- Arionic confirmed that the Kirby Air Riders title-screen crash is fixed in 0.7.4; issue #19 is
-  closed. Its Vulkan texture/query corrections remain included in 0.7.5.
-- The reporter of Mario Tennis Fever issue #14 confirmed that matches load without crashing
-  on 0.7.4 in both uniform-buffer-reuse test configurations; that issue is also closed.
-
-### Known issues
-
-- **Kirby Air Riders:** characters and lighting can still render incorrectly, and some compute
-  shaders are still unsupported.
-- **DLSS ghosting:** the native buffer changes address an identified sizing problem; the reported
-  ghosting cause and a game-level fix remain unconfirmed (issue #27).
-- **Ocarina of Time video backgrounds:** the AV1 packaging correction does not establish the
-  cause of every black-background report (issue #28).
-- **Ocarina of Time:** the exposure/fog adjustment remains a visual workaround and also thins fog
-  in interiors. `EDEN_NX2_OOT_VISUAL_WORKAROUND=0` disables it.
-- See the performance and compatibility table in the README.
-
-The PGO profile is the same as in 0.6.2.
+The HI64 source shader regression suite passed **202 test cases / 8,659,640 assertions**, including **9 targeted integer-multiply cases / 7,455,271 assertions**. The Wonder follow-up checks passed **13 cases / 12,172 assertions**. The earlier integrated shader fixes also passed 32 generated SPIR-V module validations for Vulkan 1.2. Gameplay checks are short local samples; results on every supported platform are not established by these tests.

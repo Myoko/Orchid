@@ -23,6 +23,7 @@
 #include "video_core/nx2.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/engines/kepler_compute.h"
+#include "video_core/engines/native_upscale.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
 #include "video_core/native_query_trace.h"
@@ -668,6 +669,7 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     };
     std::optional<Texture::TICEntry> input = image(0x90), output = image(0xa0);
     bool fortunes_weave = false;
+    bool compact_parameters = false;
     if (!upscale_pair(input, output)) {
         input = image(0x328);
         output = image(0x348);
@@ -676,6 +678,7 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     if (!upscale_pair(input, output)) {
         input = image(0x60);
         output = image(0x70);
+        compact_parameters = upscale_pair(input, output);
     }
     if (!upscale_pair(input, output)) {
         input.reset();
@@ -701,6 +704,7 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
             input = image(from);
             output = image(to);
             converting = true;
+            compact_parameters = from == 0x60;
         }
     }
     if (!input || !output)
@@ -759,7 +763,7 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         LOG_INFO(HW_GPU, "Upscale fallback for program {:#x}: {}", program,
                  known->second ? "decodes sRGB like the program" : "plain copy");
     }
-    const Fermi2D::Config config{
+    Fermi2D::Config config{
         .operation = known->second ? Fermi2D::Operation::SrcCopySrgbToLinear
                                    : Fermi2D::Operation::SrcCopy,
         .filter = Fermi2D::Filter::Bilinear,
@@ -773,6 +777,26 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         .src_x1 = static_cast<s32>(input->Width()),
         .src_y1 = static_cast<s32>(input->Height()),
     };
+    if (compact_parameters && cbuf.size.Value() >= 0x30 &&
+        launch_description.block_dim_y == 1 && launch_description.block_dim_z == 1) {
+        std::array<u32, 12> parameters{};
+        memory_manager.ReadBlock(cbuf_address, parameters.data(), sizeof(parameters));
+        const auto regions = DecodeNativeUpscaleRegions(
+            parameters,
+            {launch_description.block_dim_x.Value(), launch_description.grid_dim_x.Value(),
+             launch_description.grid_dim_y.Value(), launch_description.grid_dim_z.Value()},
+            {input->Width(), input->Height()}, {output->Width(), output->Height()});
+        if (regions) {
+            config.src_x0 = static_cast<s32>(regions->source[0]);
+            config.src_y0 = static_cast<s32>(regions->source[1]);
+            config.src_x1 = static_cast<s32>(regions->source[2]);
+            config.src_y1 = static_cast<s32>(regions->source[3]);
+            config.dst_x0 = static_cast<s32>(regions->destination[0]);
+            config.dst_y0 = static_cast<s32>(regions->destination[1]);
+            config.dst_x1 = static_cast<s32>(regions->destination[2]);
+            config.dst_y1 = static_cast<s32>(regions->destination[3]);
+        }
+    }
     // Debug (EDEN_NX2_SAMPLE_AT=<n>): at the n-th upscale, download the input, output and targets
     // and count non-zero words. Off by default: the downloads froze Donkey Kong Bananza for ~1.3 s.
     static const u32 sample_at = [] {
@@ -884,6 +908,9 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
                  output->Width(), output->Height(), output->block_width.Value(),
                  output->block_height.Value(), output->block_depth.Value(), output->max_mip_level.Value(),
                  done ? "blitted" : "not accelerated");
+        LOG_INFO(HW_GPU, "Upscale active rectangles ({},{})-({},{}) -> ({},{})-({},{})",
+                 config.src_x0, config.src_y0, config.src_x1, config.src_y1,
+                 config.dst_x0, config.dst_y0, config.dst_x1, config.dst_y1);
         if (converting)
             LOG_INFO(HW_GPU, "Upscale fallback converts format {:#x} -> {:#x}",
                      static_cast<u32>(*input_format), static_cast<u32>(*output_format));

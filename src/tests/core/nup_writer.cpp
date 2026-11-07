@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -18,6 +19,9 @@
 
 #include "core/file_sys/nup_container.h"
 #include "core/file_sys/nup_writer.h"
+#include "core/file_sys/control_metadata.h"
+#include "core/loader/nup.h"
+#include "core/file_sys/romfs.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/file_sys/vfs/vfs_vector.h"
 
@@ -178,6 +182,21 @@ void SetLe(std::string& buf, size_t at, u64 value, size_t bytes) {
     for (size_t i = 0; i < bytes; ++i) {
         buf[at + i] = static_cast<char>(value >> (8 * i));
     }
+}
+
+// A structurally valid native NPDM, including the Switch 2 ACID signature area. The loader
+// needs this distinction to select control/Acd_1 rather than the legacy control metadata.
+std::string NativeNpdm(u64 program_id) {
+    std::string npdm(0x500, '\0');
+    npdm.replace(0, 4, "META");
+    SetLe(npdm, 0x70, 0x80, 4); // ACI0 offset
+    SetLe(npdm, 0x78, 0x100, 4); // ACID offset
+    npdm.replace(0x80, 4, "ACI0");
+    SetLe(npdm, 0x90, program_id, 8);
+    SetLe(npdm, 0xA0, 0x40, 4); // FAH offset relative to ACI0
+    npdm.replace(0x400, 4, "ACID");
+    SetLe(npdm, 0x420, 0x340, 4); // FAC offset relative to ACID
+    return npdm;
 }
 
 // Applies `patch` to a valid archive, fixes up the TOC hash and opens the result.
@@ -579,4 +598,182 @@ TEST_CASE("NUP probes the version from the game data list tag", "[nup]") {
     probed = FileSys::Nup::ProbeMetadata(root);
     REQUIRE(probed.display_version == "1.0.0");
     REQUIRE(probed.version_source == "base");
+}
+
+TEST_CASE("NUP exposes only the newest DLC RomFS for the running application", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    Put(root / "dlc/0400ABCD00011001/65536/romfs/addon.bin", "new addon");
+    Put(root / "dlc/0400ABCD00011002/0/romfs/second.bin", "second addon");
+    Put(root / "dlc/0400ABCD00021001/0/romfs/foreign.bin", "other game");
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive, {}, {}, nullptr, nullptr) ==
+            FileSys::Nup::PackResult::Success);
+    FileSys::RealVfsFilesystem real;
+    std::vector<std::pair<u64, FileSys::VirtualFile>> addons;
+    {
+        NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+        REQUIRE(nup.GetStatus() == Loader::ResultStatus::Success);
+        addons = nup.GetAddonRomFS(TitleId);
+        REQUIRE(nup.GetAddonRomFS(0x0400ABCD00030000ULL).empty());
+    }
+    // Published RomFS files must retain their backing container after loader teardown.
+    REQUIRE(addons.size() == 2);
+    REQUIRE(addons[0].first == TitleId + 0x1001);
+    auto first = FileSys::ExtractRomFS(addons[0].second);
+    REQUIRE(first);
+    REQUIRE(Read(first->GetFile("addon.bin")) == "new addon");
+    REQUIRE(addons[1].first == TitleId + 0x1002);
+    auto second = FileSys::ExtractRomFS(addons[1].second);
+    REQUIRE(second);
+    REQUIRE(Read(second->GetFile("second.bin")) == "second addon");
+}
+
+TEST_CASE("NUP preserves edition control metadata and legacy DLC ownership", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    fs::rename(root / "dlc/0400ABCD00011001", root / "dlc/0100ABCD00011001");
+    FileSys::NACP control;
+    control.raw.save_data_owner_id = 0x0100ABCD00010000ULL;
+    control.raw.dlc_base_title_id = 0x0100ABCD00011000ULL;
+    control.raw.initial_program_index = 1;
+    control.raw.accessible_program_index_flags = 3;
+    const auto bytes = control.GetRawBytes();
+    Put(root / "Base/control.nacp",
+        std::string_view{reinterpret_cast<const char*>(bytes.data()), bytes.size()});
+    const auto archive = t.path / "Game.nup";
+    FileSys::Nup::PackOptions options;
+    options.metadata.title_name = "Native Edition Override";
+    options.metadata.display_version = "9.8.7";
+    REQUIRE(FileSys::Nup::PackDump(root, archive, options) == FileSys::Nup::PackResult::Success);
+    FileSys::RealVfsFilesystem real;
+    Loader::AppLoader_NUP loader{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    FileSys::NACP restored;
+    REQUIRE(loader.ReadControlData(restored) == Loader::ResultStatus::Success);
+    REQUIRE(restored.GetRawBytes() == bytes);
+    std::string title, version;
+    REQUIRE(loader.ReadTitle(title) == Loader::ResultStatus::Success);
+    REQUIRE(title == "Native Edition Override");
+    REQUIRE(loader.ReadDisplayVersion(version) == Loader::ResultStatus::Success);
+    REQUIRE(version == "9.8.7");
+    REQUIRE(restored.GetDLCBaseTitleId() == 0x0100ABCD00011000ULL);
+    REQUIRE(restored.GetTitleId() == 0x0100ABCD00010000ULL);
+    NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    const auto addons = nup.GetAddonRomFS(0x0100ABCD00010000ULL);
+    REQUIRE(addons.size() == 1);
+    REQUIRE(addons[0].first == 0x0100ABCD00011001ULL);
+    const auto data = FileSys::ExtractRomFS(addons[0].second);
+    REQUIRE(data);
+    REQUIRE(Read(data->GetFile("addon.bin")) == "addon data");
+    REQUIRE(StatusAfterPatch(ReadAll(archive), [](std::string& bytes_, u64 toc) {
+                const u64 meta = Le(bytes_, toc + 0x30 + 0x20, 8);
+                REQUIRE(Le(bytes_, meta, 2) == 1); // The first TLV is the NPDM.
+                SetLe(bytes_, meta, 2, 2); // A short NPDM cannot be accepted as a raw NACP.
+            }) == Loader::ResultStatus::ErrorNUPBadFormat);
+}
+
+TEST_CASE("NUP packs the preferred edition program with its family DLC", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root); // A legacy base and updates must not override the edition program.
+    constexpr u64 legacy_id = 0x0100ABCD00010000ULL;
+    constexpr u64 native_id = TitleId + 1;
+    const auto programs = root / "upgrade/65536/program";
+    Put(programs / "0/exefs/main", "legacy program 0");
+    Put(programs / "0/exefs/main.npdm", Npdm(legacy_id));
+    Put(programs / "0/romfs/legacy.bin", "legacy data");
+    Put(programs / "1/exefs/main", "native program 1");
+    Put(programs / "1/exefs/main.npdm", NativeNpdm(native_id));
+    Put(programs / "1/romfs/Empty", "");
+    fs::rename(root / "dlc/0400ABCD00011001", root / "dlc/0100ABCD00011001");
+
+    FileSys::NACP legacy;
+    const std::string legacy_name = "Legacy game";
+    std::copy(legacy_name.begin(), legacy_name.end(),
+              legacy.raw.language_entries.language_entries[0].application_name.begin());
+    const auto legacy_bytes = legacy.GetRawBytes();
+    Put(programs / "1/control/control.nacp",
+        std::string_view{reinterpret_cast<const char*>(legacy_bytes.data()), legacy_bytes.size()});
+    FileSys::NACP edition;
+    const std::string name = "Native edition";
+    std::copy(name.begin(), name.end(),
+              edition.raw.language_entries.language_entries[0].application_name.begin());
+    const std::string version = "2.3.4";
+    std::copy(version.begin(), version.end(), edition.raw.version_string.begin());
+    edition.raw.save_data_owner_id = legacy_id;
+    edition.raw.dlc_base_title_id = legacy_id + 0x1000;
+    edition.raw.program_index = 1;
+    edition.raw.initial_program_index = 1;
+    edition.raw.acd_index = 1;
+    edition.raw.apparent_platform = FileSys::ApparentPlatform::Ounce;
+    const auto edition_bytes = edition.GetRawBytes();
+    Put(programs / "1/control/Acd_1/control.nacp",
+        std::string_view{reinterpret_cast<const char*>(edition_bytes.data()), edition_bytes.size()});
+
+    REQUIRE(FileSys::Nup::IsLooseDump(root));
+    REQUIRE(FileSys::Nup::DumpRootFromMain(programs / "1/exefs/main") == root);
+    REQUIRE(FileSys::Nup::DumpRootFromMain(programs / "1/exefs") == root);
+    REQUIRE(FileSys::Nup::DumpRootFromMain(programs / "0/exefs/main") == root);
+    const auto metadata = FileSys::Nup::ProbeMetadata(root);
+    REQUIRE(metadata.title_name == name);
+    REQUIRE(metadata.display_version == version);
+    REQUIRE(metadata.version_source == "program 1");
+
+    const auto archive = t.path / "Edition.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+    FileSys::RealVfsFilesystem real;
+    NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    REQUIRE(nup.GetStatus() == Loader::ResultStatus::Success);
+    REQUIRE(nup.VerifyIntegrity({}) == Loader::ResultStatus::Success);
+    REQUIRE(nup.GetPackages().size() == 2);
+    REQUIRE(nup.GetPackages()[0].kind == NupContainer::PackageKind::Base);
+    REQUIRE(nup.GetPackages()[0].title_id == native_id);
+    REQUIRE_FALSE(nup.FindBestUpdatePackage());
+    REQUIRE(Read(nup.GetExeFSDir(0)->GetFile("main")) == "native program 1");
+    REQUIRE(PackedTree(nup.GetRomFSDir(0)) == SourceTree(programs / "1/romfs"));
+    REQUIRE(nup.GetPackages()[1].kind == NupContainer::PackageKind::Addon);
+    REQUIRE(nup.GetPackages()[1].title_id == legacy_id + 0x1001);
+    REQUIRE(Read(nup.GetRomFSDir(1)->GetFile("addon.bin")) == "addon data");
+    Loader::AppLoader_NUP loader{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    FileSys::NACP restored;
+    REQUIRE(loader.ReadControlData(restored) == Loader::ResultStatus::Success);
+    REQUIRE(restored.GetRawBytes() == edition_bytes);
+}
+
+TEST_CASE("NUP falls back from incomplete edition programs", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    const auto programs = root / "upgrade/65536/program";
+    Put(programs / "1/exefs/main", "incomplete native program"); // Missing NPDM.
+    Put(programs / "0/exefs/main", "fallback program 0");
+    Put(programs / "0/exefs/main.npdm", Npdm(TitleId));
+    Put(programs / "0/romfs/GameData/GameDataList.Product.340.byml.zs", "x");
+    bool expect_program_zero = true;
+    SECTION("program 0 remains usable") {}
+    SECTION("legacy layouts remain available when both variants are incomplete") {
+        fs::remove(programs / "0/exefs/main.npdm");
+        expect_program_zero = false;
+    }
+    REQUIRE(FileSys::Nup::IsLooseDump(root));
+    const auto archive = t.path / "Fallback.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+    FileSys::RealVfsFilesystem real;
+    NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    REQUIRE(nup.GetStatus() == Loader::ResultStatus::Success);
+    if (expect_program_zero) {
+        REQUIRE(nup.GetPackages().size() == 2);
+        REQUIRE(Read(nup.GetExeFSDir(0)->GetFile("main")) == "fallback program 0");
+        const auto metadata = FileSys::Nup::ProbeMetadata(root);
+        REQUIRE(metadata.display_version == "3.4.0");
+        REQUIRE(metadata.version_source == "program 0");
+    } else {
+        REQUIRE(nup.GetPackages().size() == 4);
+        const auto update = nup.FindBestUpdatePackage();
+        REQUIRE(update);
+        REQUIRE(Read(nup.GetExeFSDir(*update)->GetFile("main")) == "update 2 main");
+        REQUIRE(FileSys::Nup::DumpRootFromMain(root / "Base/ExeFS/main") == root);
+    }
 }
