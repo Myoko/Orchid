@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include "common/assert.h"
@@ -14,6 +15,7 @@
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
+#include "core/file_sys/romfs.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -66,41 +68,68 @@ VirtualFile RomFSFactory::OpenPatchedRomFS(u64 title_id, ContentRecordType type)
     return patch_manager.PatchRomFS(nca.get(), nca->GetRomFS(), type);
 }
 
-VirtualFile RomFSFactory::OpenPatchedRomFSWithProgramIndex(u64 title_id, u8 program_index,
-                                                           ContentRecordType type) const {
-    const auto res_title_id = GetBaseTitleIDWithProgramIndex(title_id, program_index);
-
-    return OpenPatchedRomFS(res_title_id, type);
-}
-
 namespace {
-// One global set, replaced on every loose boot; only one title runs at a time.
-std::mutex loose_aoc_mutex;
-std::vector<std::pair<u64, VirtualFile>> loose_aoc;
+// One global set, replaced on every boot; only one title runs at a time. Directories are kept
+// and built into a RomFS on first use: building walks every file, and most titles never open
+// their sibling programs.
+std::mutex boot_content_mutex;
+std::vector<BootContent> boot_content;
+std::map<std::pair<u64, ContentRecordType>, VirtualFile> boot_content_romfs;
 } // namespace
 
-void SetLooseAOC(std::vector<std::pair<u64, VirtualFile>> entries) {
-    std::scoped_lock lk{loose_aoc_mutex};
-    loose_aoc = std::move(entries);
+void SetBootContent(std::vector<BootContent> entries) {
+    std::scoped_lock lk{boot_content_mutex};
+    boot_content = std::move(entries);
+    boot_content_romfs.clear();
 }
 
-std::vector<u64> GetLooseAOCTitleIDs() {
-    std::scoped_lock lk{loose_aoc_mutex};
+std::vector<u64> ListBootContent(ContentRecordType type) {
+    std::scoped_lock lk{boot_content_mutex};
     std::vector<u64> ids;
-    for (const auto& [id, romfs] : loose_aoc) {
-        ids.push_back(id);
+    for (const auto& entry : boot_content) {
+        if (entry.type == type) {
+            ids.push_back(entry.title_id);
+        }
     }
     return ids;
 }
 
+VirtualFile OpenBootContent(u64 title_id, ContentRecordType type) {
+    std::scoped_lock lk{boot_content_mutex};
+    if (const auto it = boot_content_romfs.find({title_id, type}); it != boot_content_romfs.end()) {
+        return it->second;
+    }
+    for (const auto& entry : boot_content) {
+        if (entry.title_id == title_id && entry.type == type) {
+            LOG_INFO(Service_FS, "Serving {:016X} ({}) RomFS from {}", title_id,
+                     type == ContentRecordType::Data ? "add-on" : "program",
+                     entry.romfs->GetFullPath());
+            return boot_content_romfs[{title_id, type}] = CreateRomFS(entry.romfs);
+        }
+    }
+    return nullptr;
+}
+
+VirtualFile RomFSFactory::OpenPatchedRomFSWithProgramIndex(u64 title_id, u8 program_index,
+                                                           ContentRecordType type) const {
+    const auto res_title_id = GetBaseTitleIDWithProgramIndex(title_id, program_index);
+
+    if (auto patched = OpenPatchedRomFS(res_title_id, type); patched != nullptr ||
+                                                             type != ContentRecordType::Program) {
+        return patched;
+    }
+    auto romfs = OpenBootContent(res_title_id, type);
+    if (romfs == nullptr) {
+        return nullptr;
+    }
+    const PatchManager mods{res_title_id, filesystem_controller, content_provider};
+    return mods.PatchRomFS(nullptr, std::move(romfs), type, nullptr);
+}
+
 VirtualFile RomFSFactory::Open(u64 title_id, StorageId storage, ContentRecordType type) const {
     if (type == ContentRecordType::Data) {
-        std::scoped_lock lk{loose_aoc_mutex};
-        for (const auto& [id, romfs] : loose_aoc) {
-            if (id == title_id) {
-                LOG_INFO(Service_FS, "Serving loose add-on content {:016X}", title_id);
-                return romfs;
-            }
+        if (auto romfs = OpenBootContent(title_id, type)) {
+            return romfs;
         }
     }
 

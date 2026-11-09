@@ -17,13 +17,15 @@
 #include <fmt/format.h>
 #include <openssl/evp.h>
 
+#include "core/core.h"
+#include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nup_container.h"
 #include "core/file_sys/nup_writer.h"
-#include "core/file_sys/control_metadata.h"
-#include "core/loader/nup.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/file_sys/vfs/vfs_vector.h"
+#include "core/loader/nup.h"
 
 namespace {
 
@@ -198,6 +200,18 @@ std::string NativeNpdm(u64 program_id) {
     SetLe(npdm, 0x420, 0x340, 4); // FAC offset relative to ACID
     return npdm;
 }
+
+class CountingNupFile final : public FileSys::VectorVfsFile {
+public:
+    using VectorVfsFile::VectorVfsFile;
+
+    std::size_t Read(u8* data, std::size_t length, std::size_t offset) const override {
+        ++reads;
+        return VectorVfsFile::Read(data, length, offset);
+    }
+
+    mutable std::size_t reads{};
+};
 
 // Applies `patch` to a valid archive, fixes up the TOC hash and opens the result.
 template <typename Patch>
@@ -423,6 +437,11 @@ TEST_CASE("NUP marks updates standalone when the dump has no base", "[nup]") {
     REQUIRE(nup.GetPackages().size() == 1);
     REQUIRE(nup.GetPackages()[0].kind == NupContainer::PackageKind::Update);
     REQUIRE(nup.GetPackages()[0].standalone_update);
+    Loader::AppLoader_NUP loader{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    const auto embedded = loader.ReadEmbeddedPatches();
+    REQUIRE(embedded.size() == 1);
+    REQUIRE(embedded[0].type == FileSys::PatchType::Update);
+    REQUIRE(embedded[0].numeric_version == 65536);
     REQUIRE(nup.GetPackages()[0].title_id == TitleId);
     REQUIRE(Read(nup.GetRomFSDir(0)->GetFile("file")) == "rom");
 }
@@ -611,23 +630,24 @@ TEST_CASE("NUP exposes only the newest DLC RomFS for the running application", "
     REQUIRE(FileSys::Nup::PackDump(root, archive, {}, {}, nullptr, nullptr) ==
             FileSys::Nup::PackResult::Success);
     FileSys::RealVfsFilesystem real;
-    std::vector<std::pair<u64, FileSys::VirtualFile>> addons;
+    std::vector<std::pair<u64, FileSys::VirtualDir>> addons;
     {
         NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
         REQUIRE(nup.GetStatus() == Loader::ResultStatus::Success);
+        const auto indices = nup.FindAddonPackages(TitleId);
+        REQUIRE(indices.size() == 2);
+        REQUIRE(nup.GetPackages()[indices[0]].title_id == TitleId + 0x1001);
+        REQUIRE(nup.GetPackages()[indices[0]].version == 65536);
+        REQUIRE(nup.FindAddonPackages(0x0400ABCD00030000ULL).empty());
         addons = nup.GetAddonRomFS(TitleId);
         REQUIRE(nup.GetAddonRomFS(0x0400ABCD00030000ULL).empty());
     }
     // Published RomFS files must retain their backing container after loader teardown.
     REQUIRE(addons.size() == 2);
     REQUIRE(addons[0].first == TitleId + 0x1001);
-    auto first = FileSys::ExtractRomFS(addons[0].second);
-    REQUIRE(first);
-    REQUIRE(Read(first->GetFile("addon.bin")) == "new addon");
+    REQUIRE(Read(addons[0].second->GetFile("addon.bin")) == "new addon");
     REQUIRE(addons[1].first == TitleId + 0x1002);
-    auto second = FileSys::ExtractRomFS(addons[1].second);
-    REQUIRE(second);
-    REQUIRE(Read(second->GetFile("second.bin")) == "second addon");
+    REQUIRE(Read(addons[1].second->GetFile("second.bin")) == "second addon");
 }
 
 TEST_CASE("NUP preserves edition control metadata and legacy DLC ownership", "[nup]") {
@@ -658,15 +678,22 @@ TEST_CASE("NUP preserves edition control metadata and legacy DLC ownership", "[n
     REQUIRE(title == "Native Edition Override");
     REQUIRE(loader.ReadDisplayVersion(version) == Loader::ResultStatus::Success);
     REQUIRE(version == "9.8.7");
+    const auto embedded = loader.ReadEmbeddedPatches();
+    REQUIRE(std::count_if(embedded.begin(), embedded.end(), [](const auto& patch) {
+                return patch.type == FileSys::PatchType::DLC &&
+                       patch.title_id == 0x0100ABCD00011001ULL;
+            }) == 1);
     REQUIRE(restored.GetDLCBaseTitleId() == 0x0100ABCD00011000ULL);
     REQUIRE(restored.GetTitleId() == 0x0100ABCD00010000ULL);
     NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
     const auto addons = nup.GetAddonRomFS(0x0100ABCD00010000ULL);
     REQUIRE(addons.size() == 1);
     REQUIRE(addons[0].first == 0x0100ABCD00011001ULL);
-    const auto data = FileSys::ExtractRomFS(addons[0].second);
-    REQUIRE(data);
-    REQUIRE(Read(data->GetFile("addon.bin")) == "addon data");
+    REQUIRE(Read(addons[0].second->GetFile("addon.bin")) == "addon data");
+    // Without the legacy DLC base, the 0100 add-on still belongs to the 0400 edition program.
+    const auto edition_addons = nup.GetAddonRomFS(TitleId);
+    REQUIRE(edition_addons.size() == 1);
+    REQUIRE(edition_addons[0].first == TitleId + 0x1001);
     REQUIRE(StatusAfterPatch(ReadAll(archive), [](std::string& bytes_, u64 toc) {
                 const u64 meta = Le(bytes_, toc + 0x30 + 0x20, 8);
                 REQUIRE(Le(bytes_, meta, 2) == 1); // The first TLV is the NPDM.
@@ -727,15 +754,24 @@ TEST_CASE("NUP packs the preferred edition program with its family DLC", "[nup]"
     NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
     REQUIRE(nup.GetStatus() == Loader::ResultStatus::Success);
     REQUIRE(nup.VerifyIntegrity({}) == Loader::ResultStatus::Success);
-    REQUIRE(nup.GetPackages().size() == 2);
+    REQUIRE(nup.GetPackages().size() == 3);
     REQUIRE(nup.GetPackages()[0].kind == NupContainer::PackageKind::Base);
     REQUIRE(nup.GetPackages()[0].title_id == native_id);
+    REQUIRE(nup.FindBasePackage() == 0);
     REQUIRE_FALSE(nup.FindBestUpdatePackage());
     REQUIRE(Read(nup.GetExeFSDir(0)->GetFile("main")) == "native program 1");
     REQUIRE(PackedTree(nup.GetRomFSDir(0)) == SourceTree(programs / "1/romfs"));
-    REQUIRE(nup.GetPackages()[1].kind == NupContainer::PackageKind::Addon);
-    REQUIRE(nup.GetPackages()[1].title_id == legacy_id + 0x1001);
-    REQUIRE(Read(nup.GetRomFSDir(1)->GetFile("addon.bin")) == "addon data");
+    // Program 0 rides along as a further base package under its program-index title ID, not
+    // the legacy ID of its NPDM.
+    REQUIRE(nup.GetPackages()[1].kind == NupContainer::PackageKind::Base);
+    REQUIRE(nup.GetPackages()[1].title_id == TitleId);
+    const auto siblings = nup.GetSiblingProgramRomFS();
+    REQUIRE(siblings.size() == 1);
+    REQUIRE(siblings[0].first == TitleId);
+    REQUIRE(Read(siblings[0].second->GetFile("legacy.bin")) == "legacy data");
+    REQUIRE(nup.GetPackages()[2].kind == NupContainer::PackageKind::Addon);
+    REQUIRE(nup.GetPackages()[2].title_id == legacy_id + 0x1001);
+    REQUIRE(Read(nup.GetRomFSDir(2)->GetFile("addon.bin")) == "addon data");
     Loader::AppLoader_NUP loader{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
     FileSys::NACP restored;
     REQUIRE(loader.ReadControlData(restored) == Loader::ResultStatus::Success);
@@ -776,4 +812,314 @@ TEST_CASE("NUP falls back from incomplete edition programs", "[nup]") {
         REQUIRE(Read(nup.GetExeFSDir(*update)->GetFile("main")) == "update 2 main");
         REQUIRE(FileSys::Nup::DumpRootFromMain(root / "Base/ExeFS/main") == root);
     }
+}
+
+TEST_CASE("NUP UI metadata belongs to each container and never invents a base update", "[nup]") {
+    TempDir t;
+    FileSys::RealVfsFilesystem real;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    const auto full = t.path / "full.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, full, {}, {}, nullptr, nullptr) ==
+            FileSys::Nup::PackResult::Success);
+    Loader::AppLoader_NUP full_loader{real.OpenFile(full.string(), FileSys::OpenMode::Read)};
+    const auto raw = ReadAll(full);
+    auto counted =
+        std::make_shared<CountingNupFile>(std::vector<u8>(raw.begin(), raw.end()), "counted.nup");
+    Loader::AppLoader_NUP counted_loader{counted};
+    counted->reads = 0;
+    const auto counted_patches = counted_loader.ReadEmbeddedPatches();
+    REQUIRE(counted->reads == 0);
+    const auto patches = full_loader.ReadEmbeddedPatches();
+    REQUIRE(counted_patches.size() == patches.size());
+    REQUIRE(std::count_if(patches.begin(), patches.end(), [](const auto& patch) {
+                return patch.type == FileSys::PatchType::Update &&
+                       patch.numeric_version == 131072 &&
+                       patch.source == FileSys::PatchSource::Embedded;
+            }) == 1);
+    fs::remove_all(root / "updates");
+    fs::remove_all(root / "dlc");
+    const auto base = t.path / "base.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, base, {}, {}, nullptr, nullptr) ==
+            FileSys::Nup::PackResult::Success);
+    Loader::AppLoader_NUP base_loader{real.OpenFile(base.string(), FileSys::OpenMode::Read)};
+    REQUIRE(base_loader.ReadEmbeddedPatches().empty());
+    REQUIRE(full_loader.ReadEmbeddedPatches().size() == patches.size());
+}
+
+TEST_CASE("NUP DLC metadata ignores an unusable newest package", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    Put(root / "dlc/0400ABCD00011001/65536/romfs/new.bin", "new");
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+    auto raw = ReadAll(archive);
+    const auto toc = Le(raw, 0x08, 8);
+    for (u64 i = 0; i < Le(raw, toc + 4, 4); ++i) {
+        const auto record = toc + 0x30 + i * 0x40;
+        if (Le(raw, record, 8) == TitleId + 0x1001 && Le(raw, record + 0x14, 4) == 65536) {
+            SetLe(raw, record + 0x10, 0xFFFFFFFF, 4);
+        }
+    }
+    const auto hash = Sha256(std::string_view{raw}.substr(toc, Le(raw, 0x10, 8)));
+    std::copy(hash.begin(), hash.end(), raw.begin() + 0x18);
+    NupContainer nup{std::make_shared<FileSys::VectorVfsFile>(
+        std::vector<u8>(raw.begin(), raw.end()), "metadata.nup")};
+    REQUIRE(nup.GetStatus() == Loader::ResultStatus::Success);
+    const auto selected = nup.FindAddonPackages(TitleId);
+    REQUIRE(selected.size() == 1);
+    REQUIRE(nup.GetPackages()[selected[0]].version == 0);
+}
+
+TEST_CASE("NUP embedded patch merging deduplicates DLC identities", "[nup]") {
+    Core::System system;
+    FileSys::ContentProviderUnion provider{};
+    FileSys::PatchManager pm{TitleId, system.GetFileSystemController(), provider};
+    const FileSys::Patch addon{.enabled = true,
+                               .name = "DLC",
+                               .version = "1",
+                               .type = FileSys::PatchType::DLC,
+                               .program_id = TitleId,
+                               .title_id = TitleId + 0x1001,
+                               .source = FileSys::PatchSource::Embedded};
+    const FileSys::Patch update{.enabled = true,
+                                .name = "Update",
+                                .version = "2.0.0",
+                                .type = FileSys::PatchType::Update,
+                                .program_id = TitleId,
+                                .title_id = TitleId,
+                                .source = FileSys::PatchSource::Embedded,
+                                .numeric_version = 131072};
+    const auto patches = pm.GetPatches(nullptr, {addon, addon, update, update});
+    REQUIRE(std::count_if(patches.begin(), patches.end(), [](const auto& patch) {
+                return patch.type == FileSys::PatchType::Update;
+            }) == 1);
+    const auto dlc = std::find_if(patches.begin(), patches.end(), [](const auto& patch) {
+        return patch.type == FileSys::PatchType::DLC;
+    });
+    REQUIRE(dlc != patches.end());
+    REQUIRE(dlc->version == "1");
+    REQUIRE(dlc->enabled);
+    REQUIRE(dlc->source == FileSys::PatchSource::Embedded);
+}
+
+TEST_CASE("NUP metadata merges installed and embedded content without duplicate IDs", "[nup]") {
+    std::vector<FileSys::Patch> patches;
+    std::vector<FileSys::ContentProviderEntry> installed{
+        {.title_id = TitleId + 0x1001, .type = FileSys::ContentRecordType::Data}};
+    REQUIRE_FALSE(FileSys::PatchManager::AppendEmbeddedPatches(patches, installed, {}));
+    REQUIRE(installed.size() == 1);
+    const FileSys::Patch addon{.enabled = true,
+                               .name = "DLC",
+                               .version = "1",
+                               .type = FileSys::PatchType::DLC,
+                               .program_id = TitleId,
+                               .title_id = TitleId + 0x1001,
+                               .source = FileSys::PatchSource::Embedded};
+    REQUIRE(FileSys::PatchManager::AppendEmbeddedPatches(patches, installed, {addon}));
+    REQUIRE(installed.size() == 1);
+    REQUIRE(installed[0].title_id == addon.title_id);
+    const FileSys::Patch update{.enabled = true,
+                                .name = "Update",
+                                .version = "1.0.0",
+                                .type = FileSys::PatchType::Update,
+                                .program_id = TitleId,
+                                .title_id = TitleId,
+                                .source = FileSys::PatchSource::Embedded,
+                                .numeric_version = 65536};
+    patches.push_back(update);
+    REQUIRE_FALSE(FileSys::PatchManager::AppendEmbeddedPatches(patches, installed, {update}));
+    REQUIRE(patches.size() == 1);
+    REQUIRE(patches[0].source == FileSys::PatchSource::Embedded);
+}
+
+TEST_CASE("NUP extracts every package and repacks to the same archive", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+
+    // The repacked archive records its folder name, so extract into one of the same name.
+    const auto output = t.path / "out" / "Game";
+    REQUIRE(FileSys::Nup::DefaultExtractPath(archive) == root);
+    FileSys::Nup::PackProgress last{};
+    std::string error;
+    REQUIRE(FileSys::Nup::ExtractNup(archive, output,
+                                     [&](const FileSys::Nup::PackProgress& p) { last = p; },
+                                     nullptr, &error) == FileSys::Nup::PackResult::Success);
+    INFO(error);
+    REQUIRE(last.files_done == last.files_total);
+    REQUIRE(last.bytes_done == last.bytes_total);
+    REQUIRE(last.files_total > 0);
+
+    auto expected_base = SourceTree(root / "Base");
+    std::map<std::string, std::string> lower_base;
+    for (auto& [path, data] : expected_base) {
+        auto lowered = path;
+        lowered.replace(0, 5, path.starts_with("ExeFS") ? "exefs" : "romfs");
+        lower_base[lowered] = data;
+    }
+    REQUIRE(SourceTree(output / "base") == lower_base);
+    REQUIRE(SourceTree(output / "updates/65536") == SourceTree(root / "updates/65536"));
+    REQUIRE(SourceTree(output / "updates/131072") == SourceTree(root / "updates/131072"));
+    REQUIRE(SourceTree(output / "dlc/0400ABCD00011001/0") ==
+            SourceTree(root / "dlc/0400ABCD00011001/0"));
+    REQUIRE(fs::file_size(output / "base/romfs/empty") == 0);
+
+    const auto repacked = t.path / "out" / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(output, repacked) == FileSys::Nup::PackResult::Success);
+    REQUIRE(ReadAll(repacked) == ReadAll(archive));
+}
+
+TEST_CASE("NUP extraction refuses a used folder and cleans up after damage", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+
+    const auto used = t.path / "used";
+    Put(used / "keep.txt", "mine");
+    REQUIRE(FileSys::Nup::ExtractNup(archive, used) == FileSys::Nup::PackResult::InvalidSource);
+    REQUIRE(ReadAll(used / "keep.txt") == "mine");
+    REQUIRE(std::distance(fs::directory_iterator(used), fs::directory_iterator{}) == 1);
+
+    // Damage one stored file; the TOC hash only covers the TOC, so the archive still opens.
+    auto bytes = ReadAll(archive);
+    const auto files = RawFiles(bytes);
+    const auto random =
+        std::ranges::find(files, std::string{"random.bin"}, &RawFile::name);
+    REQUIRE(random != files.end());
+    bytes[random->extent_offset + 10] ^= 0x55;
+    const auto damaged = t.path / "damaged.nup";
+    Put(damaged, bytes);
+
+    const auto output = t.path / "damaged";
+    std::string error;
+    REQUIRE(FileSys::Nup::ExtractNup(damaged, output, {}, nullptr, &error) ==
+            FileSys::Nup::PackResult::InvalidSource);
+    REQUIRE(error.find("random.bin") != std::string::npos);
+    REQUIRE_FALSE(fs::exists(output));
+
+    // An empty folder that existed before stays, emptied again.
+    fs::create_directories(output);
+    REQUIRE(FileSys::Nup::ExtractNup(damaged, output) == FileSys::Nup::PackResult::InvalidSource);
+    REQUIRE(fs::is_directory(output));
+    REQUIRE(fs::is_empty(output));
+
+    std::atomic_bool cancel{true};
+    REQUIRE(FileSys::Nup::ExtractNup(archive, t.path / "cancelled", {}, &cancel) ==
+            FileSys::Nup::PackResult::Cancelled);
+    REQUIRE_FALSE(fs::exists(t.path / "cancelled"));
+}
+
+TEST_CASE("NUP extraction rejects names that leave the target folder", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+
+    for (const std::string_view bad : {"..", ".", "a/b", "a\\b"}) {
+        auto bytes = ReadAll(archive);
+        const u64 toc = Le(bytes, 0x08, 8);
+        const u64 packages = Le(bytes, toc + 0x04, 4);
+        const u64 dirs = Le(bytes, toc + 0x08, 8);
+        const u64 file_count = Le(bytes, toc + 0x10, 8);
+        const u64 pool = toc + Le(bytes, toc + 0x18, 8);
+        u64 pos = toc + 0x30 + packages * 0x40 + dirs * 0x18;
+        bool patched = false;
+        for (u64 i = 0; i < file_count; ++i, pos += 0x50) {
+            if (bytes.substr(pool + Le(bytes, pos, 4), Le(bytes, pos + 4, 4)) == "alpha") {
+                // Point the name at fresh bytes: "alpha" is shared by no other node.
+                bytes.replace(pool + Le(bytes, pos, 4), bad.size(), bad);
+                SetLe(bytes, pos + 4, bad.size(), 4);
+                patched = true;
+            }
+        }
+        REQUIRE(patched);
+        const auto hash = Sha256(std::string_view{bytes}.substr(toc, Le(bytes, 0x10, 8)));
+        std::copy(hash.begin(), hash.end(), bytes.begin() + 0x18);
+        const auto evil = t.path / "evil.nup";
+        Put(evil, bytes);
+
+        const auto output = t.path / "nest" / "out";
+        std::string error;
+        INFO(bad);
+        REQUIRE(FileSys::Nup::ExtractNup(evil, output, {}, nullptr, &error) ==
+                FileSys::Nup::PackResult::InvalidSource);
+        REQUIRE(error.find("unsafe name") != std::string::npos);
+        REQUIRE_FALSE(fs::exists(output));
+    }
+}
+
+TEST_CASE("NUP metadata edits match packing with the same overrides", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    FileSys::Nup::Metadata metadata;
+    metadata.title_name = "Edited Name";
+    metadata.icon = {0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9};
+    metadata.display_version = "4.5.6";
+
+    const auto expected = t.path / "expected" / "Game.nup";
+    fs::create_directories(expected.parent_path());
+    REQUIRE(FileSys::Nup::PackDump(root, expected, {.metadata = metadata}) ==
+            FileSys::Nup::PackResult::Success);
+
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+    const auto original = ReadAll(archive);
+
+    // Nothing to change leaves the file alone.
+    REQUIRE(FileSys::Nup::EditNupMetadata(archive, {}) == FileSys::Nup::PackResult::Success);
+    REQUIRE(ReadAll(archive) == original);
+
+    std::string error;
+    REQUIRE(FileSys::Nup::EditNupMetadata(archive, metadata, {}, nullptr, &error) ==
+            FileSys::Nup::PackResult::Success);
+    INFO(error);
+    REQUIRE_FALSE(fs::exists(archive.string() + ".part"));
+    REQUIRE(ReadAll(archive) == ReadAll(expected));
+
+    const auto read = FileSys::Nup::ReadNupMetadata(archive);
+    REQUIRE(read);
+    REQUIRE(read->title_name == "Edited Name");
+    REQUIRE(read->icon == metadata.icon);
+    REQUIRE(read->display_version == "4.5.6");
+
+    // A second edit replaces the metadata again instead of piling it up.
+    FileSys::Nup::Metadata rename;
+    rename.title_name = "Other";
+    REQUIRE(FileSys::Nup::EditNupMetadata(archive, rename) == FileSys::Nup::PackResult::Success);
+    REQUIRE(fs::file_size(archive) == fs::file_size(expected) - 6);
+    REQUIRE(FileSys::Nup::ReadNupMetadata(archive)->title_name == "Other");
+    FileSys::RealVfsFilesystem real;
+    NupContainer nup{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+    REQUIRE(nup.VerifyIntegrity({}) == Loader::ResultStatus::Success);
+    bool visited = false;
+    REQUIRE_FALSE(nup.ForEachMember(nup.GetPackages().size(),
+                                    [&](const auto&, const auto&, const auto&, const auto&) {
+                                        visited = true;
+                                        return true;
+                                    }));
+    REQUIRE_FALSE(visited);
+    // A visitor that stops early ends the walk with false.
+    REQUIRE_FALSE(nup.ForEachMember(0, [](const auto&, const auto&, const auto&, const auto&) {
+        return false;
+    }));
+    REQUIRE(nup.ForEachMember(0, [](const auto&, const auto&, const auto&, const auto&) {
+        return true;
+    }));
+
+    REQUIRE_FALSE(FileSys::Nup::ReadNupMetadata(root / "Base/ExeFS/main"));
+    std::atomic_bool cancel{true};
+    // A reflinked copy has nothing left to cancel, so either outcome must leave a valid file.
+    const auto result = FileSys::Nup::EditNupMetadata(archive, metadata, {}, &cancel);
+    REQUIRE((result == FileSys::Nup::PackResult::Cancelled ||
+             result == FileSys::Nup::PackResult::Success));
+    REQUIRE_FALSE(fs::exists(archive.string() + ".part"));
+    REQUIRE(FileSys::Nup::ReadNupMetadata(archive));
 }

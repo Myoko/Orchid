@@ -219,12 +219,34 @@ void BufferCache<P>::CachedWriteMemory(DAddr device_addr, u64 size) {
 }
 
 template <class P>
+void BufferCache<P>::BeginCachedWrites() {
+    cpu_recent_held_ranges.Clear();
+}
+
+template <class P>
+void BufferCache<P>::EndCachedWrites() {
+    // Writes held back before the round were gathered by it and are applied now. The page of
+    // one gathered while a core collected the next write to it is held again, after the round
+    // began (Core::GPUDirtyMemoryManager::Generation), and stays held until the next one.
+    cpu_held_ranges = std::move(cpu_recent_held_ranges);
+}
+
+template <class P>
 bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
     const bool is_dirty = IsRegionRegistered(device_addr, size);
     if (!is_dirty) {
         return false;
     }
     if (memory_tracker.IsRegionGpuModified(device_addr, size)) {
+        // Held back until the GPU thread applies it (CachedWriteMemory). Downloads taken before
+        // hold older bytes; the core reports one write per page, so the whole page is held.
+        const DAddr page_start = Common::AlignDown(device_addr, DEVICE_PAGESIZE);
+        const u64 page_size = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE) - page_start;
+        for (auto& ranges : pending_download_ranges) {
+            ranges.Subtract(page_start, page_size);
+        }
+        cpu_held_ranges.Add(page_start, page_size);
+        cpu_recent_held_ranges.Add(page_start, page_size);
         return true;
     }
     WriteMemory(device_addr, size);
@@ -418,6 +440,10 @@ std::pair<typename P::Buffer*, u32> BufferCache<P>::ObtainCPUBuffer(
     default:
         break;
     }
+    // The caller's GPU work (DMA buffer/image copies, indirect dispatches, query writes) uses
+    // these bytes: without this a later upload to them in the same command buffer was reordered
+    // in front of that work, so it read the newer data (textures from a later DMA upload).
+    buffer.MarkUsage(buffer.Offset(device_addr), size);
 
     return {&buffer, buffer.Offset(device_addr)};
 }
@@ -821,6 +847,9 @@ void BufferCache<P>::CommitAsyncFlushesHigh() {
         normalized_copies.push_back(second_copy);
     }
     runtime.PostCopyBarrier();
+    cpu_held_ranges.ForEach([&](DAddr start, DAddr end) {
+        download_ranges.Subtract(start, end - start);
+    });
     pending_downloads.emplace_back(std::move(normalized_copies));
     pending_download_ranges.emplace_back(std::move(download_ranges));
     async_buffers.emplace_back(download_staging);
@@ -1063,14 +1092,16 @@ void BufferCache<P>::BindHostVertexBuffers() {
                 SynchronizeBuffer(buffer, binding.device_addr, binding.size);
                 synced = {binding.buffer_id, binding.device_addr, binding.size, epoch};
             }
+            const u32 offset = buffer.Offset(binding.device_addr);
+            // Still read by this draw when the binding is unchanged: unmarked, a later upload to
+            // these vertices was reordered in front of this draw once TickFrame reset the tracker.
+            buffer.MarkUsage(offset, binding.size);
             if (!flags[Dirty::VertexBuffer0 + index]) {
                 flush_bindings();
                 continue;
             }
             flags[Dirty::VertexBuffer0 + index] = false;
             const u32 stride = maxwell3d->regs.vertex_streams[index].stride;
-            const u32 offset = buffer.Offset(binding.device_addr);
-            buffer.MarkUsage(offset, binding.size);
             if (!bindings.buffers.empty() && index != last_index + 1) {
                 flush_bindings();
             }
@@ -1131,6 +1162,8 @@ void BufferCache<P>::BindHostDrawIndirectBuffers() {
         Buffer& buffer = slot_buffers[binding.buffer_id];
         TouchBuffer(buffer, binding.buffer_id);
         SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+        // The draw reads these parameters: keep later uploads to them behind it.
+        buffer.MarkUsage(buffer.Offset(binding.device_addr), binding.size);
     };
     if (current_draw_indirect->include_count) {
         bind_buffer(channel_state->count_buffer_binding);
@@ -2621,6 +2654,17 @@ void BufferCache<P>::MappedUploadMemory([[maybe_unused]] Buffer& buffer,
         }
         const bool can_reorder = runtime.CanReorderUpload(buffer, copies);
         runtime.CopyBuffer(buffer, upload_staging.buffer, copies, true, can_reorder);
+        MarkUploaded(buffer, copies);
+    }
+}
+
+template <class P>
+void BufferCache<P>::MarkUploaded(Buffer& buffer, std::span<const BufferCopy> copies) {
+    // An upload that stayed in this command buffer (its region was in use, or the stream buffer
+    // was full) did not mark its bytes: a later upload to them was reordered in front of it, and
+    // this older copy overwrote the newer data.
+    for (const BufferCopy& copy : copies) {
+        buffer.MarkUsage(copy.dst_offset, copy.size);
     }
 }
 
@@ -2664,6 +2708,7 @@ void BufferCache<P>::InlineMemoryImplementation(DAddr dest_address, size_t copy_
         std::memcpy(src_pointer, inlined_buffer.data(), copy_size);
         const bool can_reorder = runtime.CanReorderUpload(buffer, copies);
         runtime.CopyBuffer(buffer, upload_staging.buffer, copies, true, can_reorder);
+        MarkUploaded(buffer, copies);
     } else {
         buffer.ImmediateUpload(buffer.Offset(dest_address), inlined_buffer.first(copy_size));
     }
@@ -2714,7 +2759,7 @@ void BufferCache<P>::DownloadBuffersMemory(std::span<const BufferId> buffer_ids)
     const u8* const mapped_memory = download_staging.mapped_span.data();
     for (const Download& download : downloads) {
         const DAddr device_addr = slot_buffers[download.buffer_id].CpuAddr() + download.copy.src_offset;
-        device_memory.WriteBlockUnsafe(
+        WriteDownloadToGuest(
             device_addr, mapped_memory + (download.copy.dst_offset - download_staging.offset),
             download.copy.size);
     }
@@ -2767,14 +2812,14 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64
             // Undo the modified offset
             const u64 dst_offset = copy.dst_offset - download_staging.offset;
             const u8* copy_mapped_memory = mapped_memory + dst_offset;
-            device_memory.WriteBlockUnsafe(copy_device_addr, copy_mapped_memory, copy.size);
+            WriteDownloadToGuest(copy_device_addr, copy_mapped_memory, copy.size);
         }
     } else {
         const std::span<u8> immediate_buffer = ImmediateBuffer(largest_copy);
         for (const BufferCopy& copy : copies) {
             buffer.ImmediateDownload(copy.src_offset, immediate_buffer.subspan(0, copy.size));
             const DAddr copy_device_addr = buffer.CpuAddr() + copy.src_offset;
-            device_memory.WriteBlockUnsafe(copy_device_addr, immediate_buffer.data(), copy.size);
+            WriteDownloadToGuest(copy_device_addr, immediate_buffer.data(), copy.size);
         }
     }
 }

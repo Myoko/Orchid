@@ -203,7 +203,14 @@ AppLoader::LoadResult AppLoader_NUP::Load(Kernel::KProcess& process, Core::Syste
     const u64 addon_application_id = nacp_file && nacp_file->GetDLCBaseTitleId() != 0
                                          ? FileSys::GetBaseTitleID(nacp_file->GetDLCBaseTitleId())
                                          : base_title_id;
-    FileSys::SetLooseAOC(nup->GetAddonRomFS(addon_application_id));
+    std::vector<FileSys::BootContent> boot_content;
+    for (auto& [id, romfs] : nup->GetAddonRomFS(addon_application_id)) {
+        boot_content.push_back({id, FileSys::ContentRecordType::Data, std::move(romfs)});
+    }
+    for (auto& [id, romfs] : nup->GetSiblingProgramRomFS()) {
+        boot_content.push_back({id, FileSys::ContentRecordType::Program, std::move(romfs)});
+    }
+    FileSys::SetBootContent(std::move(boot_content));
 
     system.GetFileSystemController().RegisterProcess(
         process.GetProcessId(), base_title_id,
@@ -220,6 +227,42 @@ ResultStatus AppLoader_NUP::VerifyIntegrity(
         return nup->GetStatus();
     }
     return nup->VerifyIntegrity(std::move(progress_callback));
+}
+
+std::vector<FileSys::Patch> AppLoader_NUP::ReadEmbeddedPatches() const {
+    std::vector<FileSys::Patch> patches;
+    if (nup->GetStatus() != ResultStatus::Success) {
+        return patches;
+    }
+    const auto& packages = nup->GetPackages();
+    if (const auto update = nup->FindBestUpdatePackage()) {
+        const auto& package = packages[*update];
+        patches.push_back({.enabled = true,
+                           .name = "Update",
+                           .version = package.display_version.empty()
+                                          ? DecodeVersion(package.version)
+                                          : package.display_version,
+                           .type = FileSys::PatchType::Update,
+                           .program_id = base_title_id,
+                           .title_id = package.title_id,
+                           .source = FileSys::PatchSource::Embedded,
+                           .numeric_version = package.version});
+    }
+    const u64 application_id = nacp_file && nacp_file->GetDLCBaseTitleId() != 0
+                                   ? FileSys::GetBaseTitleID(nacp_file->GetDLCBaseTitleId())
+                                   : base_title_id;
+    for (const auto index : nup->FindAddonPackages(application_id)) {
+        const auto& package = packages[index];
+        patches.push_back({.enabled = true,
+                           .name = "DLC",
+                           .version = fmt::format("{}", package.title_id & 0x7FF),
+                           .type = FileSys::PatchType::DLC,
+                           .program_id = application_id,
+                           .title_id = package.title_id,
+                           .source = FileSys::PatchSource::Embedded,
+                           .numeric_version = package.version});
+    }
+    return patches;
 }
 
 ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {

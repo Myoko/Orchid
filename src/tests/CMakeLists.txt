@@ -31,9 +31,13 @@ add_executable(tests
     core/core_timing.cpp
     core/page_heap.cpp
     core/read_traps.cpp
+    core/gpu_dirty_memory_manager.cpp
     core/nx2_readback_cache.cpp
     core/nx2_core_readback_capacity.cpp
+    core/game_settings.cpp
+    core/tennis_fps_patch.cpp
     core/wonder_fps_patch.cpp
+    core/nx2_sysmix_pcm.cpp
     core/nso.cpp
     core/nrr.cpp
     core/ncz_decompressor.cpp
@@ -50,6 +54,7 @@ add_executable(tests
     video_core/storage_buffer_control_flow.cpp
     video_core/memory_tracker.cpp
     video_core/buffer_cache_download.cpp
+    video_core/report_time.cpp
     video_core/unmapped_read_diagnostic.cpp
     video_core/memory_budget.cpp
     video_core/astc_recompression_override.cpp

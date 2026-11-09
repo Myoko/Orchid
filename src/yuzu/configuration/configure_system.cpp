@@ -14,6 +14,7 @@
 #include <QFileDialog>
 #include <QGraphicsItem>
 #include <QLineEdit>
+#include <QLabel>
 #include <QMessageBox>
 #include <QSpinBox>
 
@@ -114,6 +115,20 @@ void ConfigureSystem::changeEvent(QEvent* event) {
 
 void ConfigureSystem::RetranslateUI() {
     ui->retranslateUi(this);
+    UpdateTennisWarning();
+}
+
+void ConfigureSystem::UpdateTennisWarning() {
+    if (tennis_fps_warning) {
+        tennis_fps_warning->setText(
+            tr("<b>WARNING: HIGHLY EXPERIMENTAL — Mario Tennis Fever FPS patch</b><br>"
+               "Not fully validated and not recommended for normal play. "
+               "Game speed, hit detection, ball prediction and animations may behave incorrectly. "
+               "<b>Reported issue: CPU opponents may swing without hitting the ball.</b> "
+               "A displayed game speed of 100% does not guarantee correct gameplay. "
+               "60 FPS (the default) leaves the game unpatched. "
+               "Requires a supported game update and a game restart after changing FPS."));
+    }
 }
 
 void ConfigureSystem::Setup(const ConfigurationShared::Builder& builder) {
@@ -136,6 +151,10 @@ void ConfigureSystem::Setup(const ConfigurationShared::Builder& builder) {
     for (auto setting : settings) {
         if (setting->Id() == Settings::values.fps30_patch.Id() &&
             !Settings::ShowBananzaFps(program_id, Settings::IsConfiguringGlobal())) {
+            continue;
+        }
+        if (setting->Id() == Settings::values.tennis_fps.Id() &&
+            !Settings::ShowTennisFps(program_id, Settings::IsConfiguringGlobal())) {
             continue;
         }
         if (setting->Id() == Settings::values.wonder_fps.Id() &&
@@ -195,6 +214,15 @@ void ConfigureSystem::Setup(const ConfigurationShared::Builder& builder) {
     }
     for (const auto& [id, widget] : system_hold) {
         system_layout.addWidget(widget);
+        if (id == Settings::values.tennis_fps.Id()) {
+            tennis_fps_warning = new QLabel(this);
+            tennis_fps_warning->setObjectName(QStringLiteral("tennisFpsExperimentalWarning"));
+            tennis_fps_warning->setWordWrap(true);
+            tennis_fps_warning->setTextFormat(Qt::RichText);
+            tennis_fps_warning->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            system_layout.addWidget(tennis_fps_warning);
+            UpdateTennisWarning();
+        }
     }
 }
 
