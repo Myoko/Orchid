@@ -48,6 +48,7 @@ add_executable(tests
     core/priority_queue.cpp
     core/vfs_vector.cpp
     core/internal_network/network.cpp
+    video_core/shader_object_pool.cpp
     video_core/aftermath_dump.cpp
     video_core/stall_diagnostics.cpp
     video_core/storage_buffer_pointer_tracking.cpp
@@ -83,6 +84,8 @@ add_executable(tests
     video_core/ampere_i2f64.cpp
     video_core/ampere_uniform_fset.cpp
     video_core/compute_storage_buffers.cpp
+    video_core/approximate_gpu_writes.cpp
+    video_core/storage_buffer_descriptor.cpp
     video_core/compute_binding_diagnostic.cpp
     video_core/cooperative_matrix.cpp
     video_core/spirv_storage_images.cpp
